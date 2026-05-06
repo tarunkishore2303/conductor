@@ -1,0 +1,12 @@
+pluginManagement {
+	repositories {
+		maven { url = 'https://repo.spring.io/snapshot' }
+		gradlePluginPortal()
+	}
+}
+rootProject.name = 'loom'
+include 'loom-common'
+include 'loom-api'
+include 'loom-scheduler'
+include 'loom-worker'
+include 'loom-monitor'

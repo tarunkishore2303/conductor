@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: loom-api
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['loom-api:8080']
+
+  - job_name: loom-worker-1
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['loom-worker-1:8081']
+
+  - job_name: loom-worker-2
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['loom-worker-2:8082']
+
+  - job_name: loom-monitor
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['loom-monitor:8083']
