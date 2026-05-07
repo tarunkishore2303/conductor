@@ -242,3 +242,68 @@ project-loom/
 - **Micrometer + Prometheus + Grafana** — metrics pipeline
 - **springdoc-openapi** — auto-generated Swagger UI
 - **Testcontainers** — integration tests with real Postgres + Kafka
+
+## Sample curls
+``` Submit job — linear chain (A→B→C):                                                                                                                                                                                 
+  curl -s -X POST http://localhost:8080/api/v1/jobs \                                                                                                                                                                
+    -H "Content-Type: application/json" \                                                                                                                                                                            
+    -d '{                                                                                                                                                                                                            
+      "name": "my-pipeline",
+      "failurePolicy": "FAIL_FAST",
+      "tasks": [
+        {"taskId": "a", "name": "Extract",  "dependsOn": [],    "maxRetries": 3},
+        {"taskId": "b", "name": "Transform","dependsOn": ["a"], "maxRetries": 3},
+        {"taskId": "c", "name": "Load",     "dependsOn": ["b"], "maxRetries": 3}
+      ]
+    }' | jq .
+
+  Submit job — diamond DAG (A→B, A→C, B+C→D):
+  curl -s -X POST http://localhost:8080/api/v1/jobs \
+    -H "Content-Type: application/json" \
+    -d '{
+      "name": "diamond-job",
+      "failurePolicy": "CONTINUE",
+      "tasks": [
+        {"taskId": "a", "name": "Ingest",    "dependsOn": [],         "maxRetries": 2},
+        {"taskId": "b", "name": "Branch-1",  "dependsOn": ["a"],      "maxRetries": 2},
+        {"taskId": "c", "name": "Branch-2",  "dependsOn": ["a"],      "maxRetries": 2},
+        {"taskId": "d", "name": "Aggregate", "dependsOn": ["b", "c"], "maxRetries": 2}
+      ]
+    }' | jq .
+
+  Get job status (replace <JOB_ID> with id from submit response):
+  curl -s http://localhost:8080/api/v1/jobs/<JOB_ID> | jq .
+
+  Cancel job:
+  curl -s -X DELETE http://localhost:8080/api/v1/jobs/<JOB_ID> | jq .
+
+  Create workflow template:
+  curl -s -X POST http://localhost:8080/api/v1/workflows \
+    -H "Content-Type: application/json" \
+    -d '{
+      "name": "etl-template",
+      "description": "Standard ETL pipeline",
+      "defaultFailurePolicy": "FAIL_FAST",
+      "tasks": [
+        {"taskId": "e", "name": "Extract",  "dependsOn": [],    "maxRetries": 3},
+        {"taskId": "t", "name": "Transform","dependsOn": ["e"], "maxRetries": 3},
+        {"taskId": "l", "name": "Load",     "dependsOn": ["t"], "maxRetries": 3}
+      ]
+    }' | jq .
+
+  Submit job from template:
+  curl -s -X POST http://localhost:8080/api/v1/workflows/<TEMPLATE_ID>/jobs \
+    -H "Content-Type: application/json" \
+    -d '{"name": "etl-run-1"}' | jq .
+
+  View DLQ (dead-lettered tasks):
+  curl -s "http://localhost:8080/api/v1/dlq?page=0&size=20" | jq .
+
+  Retry DLQ task:
+  curl -s -X POST http://localhost:8080/api/v1/dlq/<TASK_ID>/retry | jq .
+
+  Monitor stats (port 8083):
+  curl -s http://localhost:8083/monitor/stats | jq .
+
+  Monitor DLQ:
+  curl -s "http://localhost:8083/monitor/dlq?page=0&size=20" | jq . ```
