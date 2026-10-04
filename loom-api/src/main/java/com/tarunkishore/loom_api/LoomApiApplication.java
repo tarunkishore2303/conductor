@@ -6,7 +6,7 @@ import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 
 @SpringBootApplication
-@EntityScan(basePackages = "com.loom.common.model")
+@EntityScan(basePackages = {"com.loom.common.model", "com.tarunkishore.loom_api.ai"})
 @EnableJpaRepositories(basePackages = "com.tarunkishore.loom_api.repository")
 public class LoomApiApplication {
 
