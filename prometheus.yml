@@ -3,6 +3,12 @@ global:
   evaluation_interval: 15s
 
 scrape_configs:
+  # Optional AI profile; an absent target does not affect orchestration.
+  - job_name: loom-ai
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['loom-ai:8085']
+
   - job_name: loom-api
     metrics_path: /actuator/prometheus
     static_configs:

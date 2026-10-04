@@ -35,3 +35,8 @@ out/
 
 ### VS Code ###
 .vscode/
+
+# Local configuration (examples are safe to commit).
+.env
+.env.*
+!.env.example

@@ -9,12 +9,11 @@ COPY loom-scheduler/build.gradle loom-scheduler/build.gradle
 COPY loom-worker/build.gradle loom-worker/build.gradle
 COPY loom-monitor/build.gradle loom-monitor/build.gradle
 COPY loom-ai/build.gradle loom-ai/build.gradle
-COPY loom-common/src loom-common/src
-COPY loom-api/src loom-api/src
-RUN ./gradlew :loom-api:bootJar -x test --no-daemon
+COPY loom-ai/src loom-ai/src
+RUN ./gradlew :loom-ai:bootJar -x test --no-daemon
 
 FROM docker.io/library/eclipse-temurin:25-jre-alpine
 WORKDIR /app
-COPY --from=builder /workspace/loom-api/build/libs/loom-api-*.jar app.jar
-EXPOSE 8080
+COPY --from=builder /workspace/loom-ai/build/libs/loom-ai-*.jar app.jar
+EXPOSE 8085
 ENTRYPOINT ["java", "-jar", "app.jar"]

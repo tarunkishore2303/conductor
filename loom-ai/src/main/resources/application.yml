@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: loom-ai
+server:
+  port: ${AI_PORT:8085}
+conductor:
+  ai:
+    enabled: ${AI_ENABLED:false}
+    base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
+    model: ${AI_MODEL:qwen2.5-coder:7b}
+    temperature: ${AI_TEMPERATURE:0.0}
+    timeout: ${AI_REQUEST_TIMEOUT:120s}
+    max-tokens: ${AI_MAX_TOKENS:4096}
+management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        ai.request.duration: true
+      maximum-expected-value:
+        http.server.requests: 180s
+        ai.request.duration: 180s
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus

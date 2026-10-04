@@ -1,0 +1,714 @@
+{
+    "id":  null,
+    "uid":  "conductor-requests",
+    "title":  "Conductor — Application Requests",
+    "description":  "Business HTTP requests and local AI generation. Actuator traffic excluded; route labels use framework templates. Counters reset on process restarts.",
+    "tags":  [
+                 "conductor",
+                 "requests",
+                 "ai"
+             ],
+    "timezone":  "browser",
+    "schemaVersion":  38,
+    "version":  1,
+    "refresh":  "15s",
+    "time":  {
+                 "from":  "now-30m",
+                 "to":  "now"
+             },
+    "timepicker":  {
+
+                   },
+    "editable":  true,
+    "annotations":  {
+                        "list":  [
+
+                                 ]
+                    },
+    "templating":  {
+                       "list":  [
+                                    {
+                                        "name":  "service",
+                                        "label":  "HTTP service",
+                                        "type":  "query",
+                                        "datasource":  {
+                                                           "type":  "prometheus",
+                                                           "uid":  "prometheus"
+                                                       },
+                                        "definition":  "label_values(http_server_requests_seconds_count, job)",
+                                        "query":  {
+                                                      "query":  "label_values(http_server_requests_seconds_count, job)",
+                                                      "refId":  "service"
+                                                  },
+                                        "regex":  "/^loom-(?:api|ai|worker-1|worker-2|monitor)$/",
+                                        "refresh":  1,
+                                        "multi":  true,
+                                        "includeAll":  true,
+                                        "allValue":  "loom-(api|ai|worker-1|worker-2|monitor)",
+                                        "current":  {
+                                                        "selected":  true,
+                                                        "text":  [
+                                                                     "All"
+                                                                 ],
+                                                        "value":  [
+                                                                      "$__all"
+                                                                  ]
+                                                    },
+                                        "options":  [
+
+                                                    ]
+                                    }
+                                ]
+                   },
+    "panels":  [
+                   {
+                       "id":  1,
+                       "title":  "Business requests since process start",
+                       "type":  "stat",
+                       "description":  "Cumulative requests across selected services; resets on service restart.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  0,
+                                       "w":  6,
+                                       "h":  5
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "values":  false,
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ],
+                                                             "fields":  ""
+                                                         },
+                                       "orientation":  "auto",
+                                       "textMode":  "auto",
+                                       "colorMode":  "value",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\"})",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  2,
+                       "title":  "Business requests / second",
+                       "type":  "stat",
+                       "description":  "",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  6,
+                                       "y":  0,
+                                       "w":  6,
+                                       "h":  5
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "reqps",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "values":  false,
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ],
+                                                             "fields":  ""
+                                                         },
+                                       "orientation":  "auto",
+                                       "textMode":  "auto",
+                                       "colorMode":  "value",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum(rate(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\"}[$__rate_interval]))",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  3,
+                       "title":  "HTTP 5xx error ratio",
+                       "type":  "stat",
+                       "description":  "HTTP server failures divided by all business requests. Empty failure series displays zero.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  12,
+                                       "y":  0,
+                                       "w":  6,
+                                       "h":  5
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "percentunit",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "values":  false,
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ],
+                                                             "fields":  ""
+                                                         },
+                                       "orientation":  "auto",
+                                       "textMode":  "auto",
+                                       "colorMode":  "value",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum(rate(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\",status=~\"5..\"}[$__rate_interval])) / clamp_min(sum(rate(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\"}[$__rate_interval])), 1e-9) or vector(0)",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  4,
+                       "title":  "AI generation requests since process start",
+                       "type":  "stat",
+                       "description":  "Counts model generation calls, including failed calls. Independent of service selector.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  18,
+                                       "y":  0,
+                                       "w":  6,
+                                       "h":  5
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "reduceOptions":  {
+                                                             "values":  false,
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ],
+                                                             "fields":  ""
+                                                         },
+                                       "orientation":  "auto",
+                                       "textMode":  "auto",
+                                       "colorMode":  "value",
+                                       "graphMode":  "none"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum(ai_requests_total{job=\"loom-ai\",operation=\"workflow_generation\"}) or vector(0)",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  5,
+                       "title":  "HTTP throughput by service",
+                       "type":  "timeseries",
+                       "description":  "",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  5,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "reqps",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "legend":  {
+                                                      "displayMode":  "table",
+                                                      "placement":  "bottom",
+                                                      "calcs":  [
+                                                                    "lastNotNull"
+                                                                ]
+                                                  },
+                                       "tooltip":  {
+                                                       "mode":  "multi",
+                                                       "sort":  "desc"
+                                                   }
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum by (job) (rate(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\"}[$__rate_interval]))",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  6,
+                       "title":  "HTTP error rate by service and status",
+                       "type":  "timeseries",
+                       "description":  "Includes expected validation errors (4xx) and server errors (5xx).",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  12,
+                                       "y":  5,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "reqps",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "legend":  {
+                                                      "displayMode":  "table",
+                                                      "placement":  "bottom",
+                                                      "calcs":  [
+                                                                    "lastNotNull"
+                                                                ]
+                                                  },
+                                       "tooltip":  {
+                                                       "mode":  "multi",
+                                                       "sort":  "desc"
+                                                   }
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum by (job,status) (rate(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\",status=~\"[45]..\"}[$__rate_interval]))",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  7,
+                       "title":  "Requests by route, method and status",
+                       "type":  "table",
+                       "description":  "Counts in the selected interval using framework route templates, not raw IDs. Very new series may require two scrapes.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  13,
+                                       "w":  24,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "short",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "showHeader":  true,
+                                       "cellHeight":  "sm"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum by (job,method,uri,status) (increase(http_server_requests_seconds_count{job=~\"$service\",uri!~\"/actuator.*\"}[$__range]))",
+                                           "format":  "table",
+                                           "instant":  true
+                                       }
+                                   ],
+                       "transformations":  [
+                                               {
+                                                   "id":  "labelsToFields",
+                                                   "options":  {
+                                                                   "mode":  "columns"
+                                                               }
+                                               },
+                                               {
+                                                   "id":  "organize",
+                                                   "options":  {
+                                                                   "excludeByName":  {
+                                                                                         "Time":  true
+                                                                                     },
+                                                                   "renameByName":  {
+                                                                                        "Value":  "Requests",
+                                                                                        "job":  "Service",
+                                                                                        "method":  "Method",
+                                                                                        "uri":  "Route",
+                                                                                        "status":  "HTTP status"
+                                                                                    }
+                                                               }
+                                               }
+                                           ]
+                   },
+                   {
+                       "id":  8,
+                       "title":  "HTTP p95 latency by service",
+                       "type":  "timeseries",
+                       "description":  "Requires histogram configuration and two Prometheus scrapes after service startup.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  21,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "s",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "legend":  {
+                                                      "displayMode":  "table",
+                                                      "placement":  "bottom",
+                                                      "calcs":  [
+                                                                    "lastNotNull"
+                                                                ]
+                                                  },
+                                       "tooltip":  {
+                                                       "mode":  "multi",
+                                                       "sort":  "desc"
+                                                   }
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "histogram_quantile(0.95, sum by (job,le) (rate(http_server_requests_seconds_bucket{job=~\"$service\",uri!~\"/actuator.*\"}[$__rate_interval])))",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  9,
+                       "title":  "AI generation throughput and failures",
+                       "type":  "timeseries",
+                       "description":  "AI service metrics; not filtered by the HTTP service selector.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  12,
+                                       "y":  21,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "reqps",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "legend":  {
+                                                      "displayMode":  "table",
+                                                      "placement":  "bottom",
+                                                      "calcs":  [
+                                                                    "lastNotNull"
+                                                                ]
+                                                  },
+                                       "tooltip":  {
+                                                       "mode":  "multi",
+                                                       "sort":  "desc"
+                                                   }
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum(rate(ai_requests_total{job=\"loom-ai\",operation=\"workflow_generation\"}[$__rate_interval]))",
+                                           "legendFormat":  "Generation requests",
+                                           "range":  true
+                                       },
+                                       {
+                                           "refId":  "B",
+                                           "expr":  "sum(rate(ai_request_failures_total{job=\"loom-ai\",operation=\"workflow_generation\"}[$__rate_interval])) or vector(0)",
+                                           "legendFormat":  "Generation failures",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  10,
+                       "title":  "AI generation p95 since process start",
+                       "type":  "stat",
+                       "description":  "Approximate p95 from cumulative histogram buckets. Useful for infrequent calls, including the first call. Resets when loom-ai restarts.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  29,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "s",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "textMode":  "auto",
+                                       "colorMode":  "value",
+                                       "graphMode":  "none",
+                                       "reduceOptions":  {
+                                                             "values":  false,
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ],
+                                                             "fields":  ""
+                                                         },
+                                       "justifyMode":  "auto",
+                                       "orientation":  "auto"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "histogram_quantile(0.95, sum by (le) (ai_request_duration_seconds_bucket{job=\"loom-ai\",operation=\"workflow_generation\"}))",
+                                           "legendFormat":  "{{job}} {{method}} {{uri}} {{status}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   },
+                   {
+                       "id":  11,
+                       "title":  "AI generation mean since process start",
+                       "type":  "stat",
+                       "description":  "Mean duration by outcome across calls since loom-ai started. Shows the first call without needing another model invocation. Resets on restart.",
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "prometheus"
+                                      },
+                       "gridPos":  {
+                                       "x":  12,
+                                       "y":  29,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "unit":  "s",
+                                                            "color":  {
+                                                                          "mode":  "palette-classic"
+                                                                      },
+                                                            "thresholds":  {
+                                                                               "mode":  "absolute",
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  null
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        },
+                                           "overrides":  [
+
+                                                         ]
+                                       },
+                       "options":  {
+                                       "textMode":  "auto",
+                                       "colorMode":  "value",
+                                       "graphMode":  "none",
+                                       "reduceOptions":  {
+                                                             "values":  false,
+                                                             "calcs":  [
+                                                                           "lastNotNull"
+                                                                       ],
+                                                             "fields":  ""
+                                                         },
+                                       "justifyMode":  "auto",
+                                       "orientation":  "auto"
+                                   },
+                       "targets":  [
+                                       {
+                                           "refId":  "A",
+                                           "expr":  "sum by (outcome) (ai_request_duration_seconds_sum{job=\"loom-ai\",operation=\"workflow_generation\"}) / sum by (outcome) (ai_request_duration_seconds_count{job=\"loom-ai\",operation=\"workflow_generation\"})",
+                                           "legendFormat":  "{{outcome}}",
+                                           "range":  true
+                                       }
+                                   ]
+                   }
+               ]
+}
