@@ -12,6 +12,14 @@ conductor:
     timeout: ${AI_REQUEST_TIMEOUT:120s}
     max-tokens: ${AI_MAX_TOKENS:4096}
 management:
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        ai.request.duration: true
+      maximum-expected-value:
+        http.server.requests: 180s
+        ai.request.duration: 180s
   endpoints:
     web:
       exposure:
