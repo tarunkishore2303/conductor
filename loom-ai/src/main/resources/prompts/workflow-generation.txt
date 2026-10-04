@@ -9,5 +9,13 @@ Use unique identifiers starting with a letter, containing only letters, numbers,
 Workflow/task names max 255 characters; description max 2000. Generate 1 to 50 tasks.
 Every dependency references a task identifier. Dependencies must be explicit. No cycles.
 Parallel tasks share upstream dependencies; a join depends on every parallel task.
-For parallel invoice batches, use two fixed tasks, not dynamic fanout.
+When the request asks for parallel work, represent it with separate task nodes. A single task named "in parallel" is sequential, not parallelism.
+For parallel invoice generation, use exactly two fixed invoice batch tasks, not dynamic fanout.
+Example dependency shape for customer orders and parallel invoices:
+downloadOrders: []
+validateOrders: [downloadOrders]
+invoiceBatch1: [validateOrders]
+invoiceBatch2: [validateOrders]
+uploadInvoices: [invoiceBatch1, invoiceBatch2]
+sendNotification: [uploadInvoices]
 Use maxRetries between 0 and 5, default 1. Root tasks have an empty dependencies array.
