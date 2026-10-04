@@ -1,14 +1,18 @@
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM docker.io/library/eclipse-temurin:25-jdk-alpine AS builder
 WORKDIR /workspace
 COPY gradlew build.gradle settings.gradle ./
 COPY gradle ./gradle
+RUN chmod +x gradlew && ./gradlew --version
 COPY loom-common/build.gradle loom-common/build.gradle
+COPY loom-api/build.gradle loom-api/build.gradle
 COPY loom-scheduler/build.gradle loom-scheduler/build.gradle
+COPY loom-worker/build.gradle loom-worker/build.gradle
+COPY loom-monitor/build.gradle loom-monitor/build.gradle
 COPY loom-common/src loom-common/src
 COPY loom-scheduler/src loom-scheduler/src
 RUN ./gradlew :loom-scheduler:bootJar -x test --no-daemon
 
-FROM eclipse-temurin:21-jre-alpine
+FROM docker.io/library/eclipse-temurin:25-jre-alpine
 WORKDIR /app
 COPY --from=builder /workspace/loom-scheduler/build/libs/loom-scheduler-*.jar app.jar
 EXPOSE 8084

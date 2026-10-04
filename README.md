@@ -1,6 +1,13 @@
-# Project Loom
+# Conductor
 
-Distributed async job orchestration engine — a production-grade mini-Airflow built with Spring Boot, Kafka, Redis, and PostgreSQL.
+**Conductor evolves [Project Loom](https://github.com/tarunkishore2303/project-loom) into an intelligent distributed workflow platform.** This repository preserves Loom's original Git history. The orchestration modules retain their `loom-*` names while the platform evolves.
+
+The current release upgrades the runtime foundation; AI features are planned and are not implemented yet.
+
+See [runtime upgrade decisions and verification](docs/runtime-upgrade.md) for the
+Spring Boot 4, Java 25, and Podman migration details.
+
+Distributed async job orchestration engine — a portfolio workflow engine built with Spring Boot, Kafka, Redis, and PostgreSQL.
 
 Submit a DAG of tasks via REST. Loom validates the graph, persists it, and executes tasks across horizontally-scaled workers with distributed locking, exponential backoff retry, dead-letter queuing, and real-time observability.
 
@@ -81,14 +88,43 @@ Submit a DAG of tasks via REST. Loom validates the graph, persists it, and execu
 
 ### Prerequisites
 
-- Docker + Docker Compose
-- Java 21 (for local builds only)
+- Podman + standalone Docker Compose (no Docker Desktop required)
+- Java 25 (for local builds only)
 
-### Run
+### Windows setup
+
+Run the WSL installation in Administrator PowerShell and restart if requested:
+
+```powershell
+wsl --install --no-distribution
+winget install --id RedHat.Podman --exact
+winget install --id Docker.DockerCompose --exact
+```
+
+In a new terminal (machine initialization is needed only once):
+
+```powershell
+podman machine init
+podman machine start
+.\gradlew.bat build
+.\scripts\compose.ps1 up --build -d
+```
+
+The helper locates Podman and a standalone Docker Compose provider even when the
+current terminal's PATH has not refreshed. Stop the stack with
+`.\scripts\compose.ps1 down`; named volumes retain database data.
+
+Testcontainers uses Podman's Docker-compatible API, not Docker Desktop. On Windows,
+`podman machine start` exposes the default named pipe. Run container tests with
+`.\gradlew.bat integrationTest`. On other platforms, configure `DOCKER_HOST` for
+Podman's socket as described in the [Testcontainers runtime guide](https://java.testcontainers.org/supported_docker_environment/).
+Do not disable Ryuk by default; it cleans up temporary test containers.
+
+### Run on Linux/macOS
 
 ```bash
-./gradlew build -x test
-docker-compose up --build
+./gradlew build
+PODMAN_COMPOSE_PROVIDER=docker-compose podman compose up --build -d
 ```
 
 Services start in dependency order:
@@ -198,8 +234,8 @@ Key metrics:
 ./gradlew :loom-scheduler:test --tests "com.loom.scheduler.service.DAGSchedulerTest"
 ./gradlew :loom-worker:test --tests "com.loom.worker.service.TaskExecutorServiceTest"
 
-# Integration tests (requires Docker)
-./gradlew test
+# Integration tests (requires a running Podman machine)
+./gradlew integrationTest
 ```
 
 ### Plugging in Real Task Logic
@@ -219,13 +255,13 @@ public class MyTaskHandler implements TaskHandler {
 ### Module Structure
 
 ```
-project-loom/
+conductor/
 ├── loom-common/       # Shared models, DTOs, Kafka events
 ├── loom-api/          # REST API + Flyway migrations
 ├── loom-scheduler/    # Reactive DAG execution engine
 ├── loom-worker/       # Task executor (scale horizontally)
 ├── loom-monitor/      # Read-only observability service
-├── docker-compose.yml
+├── compose.yml
 └── prometheus.yml
 ```
 
@@ -233,7 +269,7 @@ project-loom/
 
 ## Tech Stack
 
-- **Java 21** / Spring Boot 3.2
+- **Java 25** / Spring Boot 4.1.1
 - **Spring Data JPA** (loom-api, loom-worker, loom-monitor)
 - **Spring Data R2DBC + WebFlux** (loom-scheduler)
 - **Spring Kafka** — producer + consumer across all services

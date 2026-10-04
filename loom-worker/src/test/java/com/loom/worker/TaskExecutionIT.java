@@ -15,18 +15,19 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.serializer.JsonDeserializer;
+import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.KafkaContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
-import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,13 +40,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TaskExecutionIT {
 
     @Container
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15")
         .withDatabaseName("loom")
         .withUsername("loom")
         .withPassword("loom");
 
     @Container
-    static final KafkaContainer kafka = new KafkaContainer(
+    static final ConfluentKafkaContainer kafka = new ConfluentKafkaContainer(
         DockerImageName.parse("confluentinc/cp-kafka:7.5.3"));
 
     @SuppressWarnings("resource")
@@ -81,7 +82,7 @@ class TaskExecutionIT {
     private UUID insertJobAndTask(String taskName) {
         UUID jobId  = UUID.randomUUID();
         UUID taskId = UUID.randomUUID();
-        Instant now = Instant.now();
+        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
         jdbc.update("""
             INSERT INTO jobs (id, name, status, failure_policy, created_at, updated_at, version)
@@ -102,10 +103,10 @@ class TaskExecutionIT {
             ConsumerConfig.GROUP_ID_CONFIG, "it-result-" + UUID.randomUUID(),
             ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
             ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
-            ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JsonDeserializer.class.getName(),
-            JsonDeserializer.TRUSTED_PACKAGES, "com.loom.common.event",
-            JsonDeserializer.VALUE_DEFAULT_TYPE, TaskResultEvent.class.getName(),
-            JsonDeserializer.USE_TYPE_INFO_HEADERS, "false"
+            ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JacksonJsonDeserializer.class.getName(),
+            JacksonJsonDeserializer.TRUSTED_PACKAGES, "com.loom.common.event",
+            JacksonJsonDeserializer.VALUE_DEFAULT_TYPE, TaskResultEvent.class.getName(),
+            JacksonJsonDeserializer.USE_TYPE_INFO_HEADERS, "false"
         ));
         consumer.subscribe(List.of("task-results"));
         return consumer;

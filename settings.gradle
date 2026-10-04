@@ -1,10 +1,9 @@
 pluginManagement {
 	repositories {
-		maven { url = 'https://repo.spring.io/snapshot' }
 		gradlePluginPortal()
 	}
 }
-rootProject.name = 'loom'
+rootProject.name = 'conductor'
 include 'loom-common'
 include 'loom-api'
 include 'loom-scheduler'

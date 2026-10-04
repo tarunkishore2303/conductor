@@ -1,11 +1,11 @@
-version: '3.8'
+name: conductor
 
 services:
 
   # ── Infrastructure ──────────────────────────────────────────────────────────
 
   postgres:
-    image: postgres:15
+    image: docker.io/library/postgres:15
     environment:
       POSTGRES_DB: loom
       POSTGRES_USER: loom
@@ -21,13 +21,13 @@ services:
       retries: 10
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.3
+    image: docker.io/confluentinc/cp-zookeeper:7.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
-    image: confluentinc/cp-kafka:7.5.3
+    image: docker.io/confluentinc/cp-kafka:7.5.3
     depends_on:
       - zookeeper
     ports:
@@ -48,7 +48,7 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     ports:
       - "6379:6379"
     healthcheck:
@@ -151,7 +151,7 @@ services:
   # ── Observability ────────────────────────────────────────────────────────────
 
   prometheus:
-    image: prom/prometheus:v2.48.0
+    image: docker.io/prom/prometheus:v2.48.0
     ports:
       - "9090:9090"
     volumes:
@@ -161,7 +161,7 @@ services:
       - loom-monitor
 
   grafana:
-    image: grafana/grafana:10.2.3
+    image: docker.io/grafana/grafana:10.2.3
     ports:
       - "3000:3000"
     environment:

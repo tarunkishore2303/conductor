@@ -1,8 +1,8 @@
 package com.tarunkishore.loom_api.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.Job;
@@ -33,7 +33,7 @@ public class WorkflowService {
         String dagJson;
         try {
             dagJson = objectMapper.writeValueAsString(request.tasks());
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalArgumentException("Failed to serialize DAG: " + e.getMessage());
         }
 
@@ -56,7 +56,7 @@ public class WorkflowService {
         try {
             return objectMapper.readValue(template.getDagDefinitionJson(),
                 new TypeReference<>() {});
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("Corrupt template DAG: " + e.getMessage());
         }
     }
