@@ -8,6 +8,7 @@ COPY loom-api/build.gradle loom-api/build.gradle
 COPY loom-scheduler/build.gradle loom-scheduler/build.gradle
 COPY loom-worker/build.gradle loom-worker/build.gradle
 COPY loom-monitor/build.gradle loom-monitor/build.gradle
+COPY loom-ai/build.gradle loom-ai/build.gradle
 COPY loom-common/src loom-common/src
 COPY loom-monitor/src loom-monitor/src
 RUN ./gradlew :loom-monitor:bootJar -x test --no-daemon
