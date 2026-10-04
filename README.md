@@ -2,7 +2,7 @@
 
 **Conductor evolves [Project Loom](https://github.com/tarunkishore2303/project-loom) into an intelligent distributed workflow platform.** This repository preserves Loom's original Git history. The orchestration modules retain their `loom-*` names while the platform evolves.
 
-The current release upgrades the runtime foundation; AI features are planned and are not implemented yet.
+The current release includes an isolated Ollama-powered AI service for structured workflow generation, deterministic validation, preview, and explicit approval. Workers currently execute simulated no-op tasks.
 
 See [runtime upgrade decisions and verification](docs/runtime-upgrade.md) for the
 Spring Boot 4, Java 25, and Podman migration details.
@@ -12,6 +12,30 @@ Distributed async job orchestration engine — a portfolio workflow engine built
 Submit a DAG of tasks via REST. Loom validates the graph, persists it, and executes tasks across horizontally-scaled workers with distributed locking, exponential backoff retry, dead-letter queuing, and real-time observability.
 
 ---
+
+## AI Workflow Generation
+
+Natural language becomes a structured proposal. Conductor validates its DAG,
+stores a preview, and creates a normal workflow only after explicit approval.
+**The LLM never controls scheduling or task execution.**
+
+```mermaid
+flowchart LR
+    User[User prompt] --> AI[loom-ai / Ollama]
+    AI --> Proposal[Structured proposal]
+    Proposal --> Validator[loom-api / existing DAGValidator]
+    Validator --> Preview[Stored preview]
+    Preview --> Approval[Explicit user approval]
+    Approval --> Revalidate[Revalidate]
+    Revalidate --> Workflow[Existing WorkflowService / template]
+    Workflow --> Execute[Separate normal execution request]
+```
+
+AI uses only local Ollama models, with no cloud API key. The optional `ai` Compose
+profile starts `loom-ai` and Ollama; normal orchestration runs without them.
+See [AI setup, API examples, tradeoffs, and smoke test](docs/ai-workflow-generation.md)
+and [.env.example](.env.example). Preview: `POST /api/v1/ai/workflows/generate`.
+Approval: `POST /api/v1/ai/workflows/proposals/{proposalId}/approve`.
 
 ## Architecture
 
@@ -58,6 +82,7 @@ Submit a DAG of tasks via REST. Loom validates the graph, persists it, and execu
 | `loom-scheduler` | DAG execution engine, task scheduling | — | WebFlux, R2DBC, Kafka consumer |
 | `loom-worker` | Task execution, retry, DLQ | 8081 / 8082 | Spring MVC, JPA, Redisson, Kafka |
 | `loom-monitor` | Read-only stats and DLQ browser | 8083 | Spring MVC, JPA |
+| `loom-ai` | Structured workflow proposals; no execution access | 8085 | Spring AI, Ollama, Spring MVC |
 
 ### Infrastructure
 
