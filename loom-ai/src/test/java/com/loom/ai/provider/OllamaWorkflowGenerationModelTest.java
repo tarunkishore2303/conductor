@@ -4,6 +4,8 @@ import com.loom.ai.model.GeneratedWorkflowProposal;
 import com.loom.ai.service.AiOutputValidationException;
 import com.loom.ai.service.AiProviderUnavailableException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -52,6 +54,18 @@ class OllamaWorkflowGenerationModelTest {
     @Test
     void rejectsUnknownFields() {
         when(chatModel.call(any(Prompt.class))).thenReturn(response("{\"name\":\"Demo\",\"description\":\"Demo\",\"tasks\":[],\"execute\":true}"));
+        assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiOutputValidationException.class);
+    }
+    @ParameterizedTest
+    @ValueSource(strings = {"1.5", "\"1\"", "true"})
+    void rejectsIncorrectRetryTypes(String retry) {
+        String output = "{\"name\":\"Demo\",\"description\":\"Demo\",\"tasks\":[{\"identifier\":\"task\",\"name\":\"Task\",\"type\":\"NOOP\",\"dependencies\":[],\"maxRetries\":" + retry + "}]}";
+        when(chatModel.call(any(Prompt.class))).thenReturn(response(output));
+        assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiOutputValidationException.class);
+    }
+    @Test
+    void rejectsNumericName() {
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("{\"name\":42,\"description\":\"Demo\",\"tasks\":[]}"));
         assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiOutputValidationException.class);
     }
     @Test
