@@ -22,3 +22,4 @@ Conductor extends Project Loom. Preserve its Git history and document that origi
 - Use fake or mocked models in normal tests. Live-provider tests are optional and explicitly enabled.
 - Run relevant unit and integration tests alongside features. Report verification limits honestly.
 - Keep commits logically separated and follow the global Codex commit attribution instructions.
+- Put project documentation in the root README.md. Do not add separate documentation files unless the user explicitly requests them.

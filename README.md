@@ -33,9 +33,87 @@ flowchart LR
 
 AI uses only local Ollama models, with no cloud API key. The optional `ai` Compose
 profile starts `loom-ai` and Ollama; normal orchestration runs without them.
-See [AI setup, API examples, tradeoffs, and smoke test](docs/ai-workflow-generation.md)
-and [.env.example](.env.example). Preview: `POST /api/v1/ai/workflows/generate`.
-Approval: `POST /api/v1/ai/workflows/proposals/{proposalId}/approve`.
+Spring AI 2.0.1 is scoped to `loom-ai` and is [compatible with Boot 4.1](https://docs.spring.io/spring-ai/reference/getting-started.html).
+The provider sends a native JSON schema to Ollama and strictly validates output
+types and bounds. `loom-ai` has no database credentials or Kafka execution
+producer. Its separate process isolates model dependencies and timeouts from
+orchestration; the tradeoff is one extra local service.
+
+`loom-api` owns proposal persistence and Flyway migrations. Persisting the preview
+ensures approval uses exactly the stored content. Approval locks the proposal,
+revalidates it, and calls the existing `WorkflowService` in one transaction.
+Proposals expire after 24 hours; duplicate approval returns 409. Approval never
+starts execution. Original user prompts are not stored with proposals.
+
+### Ollama setup
+
+AI is disabled by default. The optional profile starts a local Ollama container
+with a persistent model volume and no published model port. Enable AI and install
+the model explicitly; starting Compose does not download model weights:
+
+```powershell
+$env:AI_ENABLED = 'true'
+$env:AI_MODEL = 'qwen2.5-coder:7b'
+.\scripts\compose.ps1 --profile ai up --build -d
+.\scripts\compose.ps1 --profile ai exec ollama ollama pull qwen2.5-coder:7b
+.\scripts\compose.ps1 --profile ai exec ollama ollama list
+```
+
+See [.env.example](.env.example) for Compose settings. `OLLAMA_BASE_URL` defaults
+to `http://ollama:11434` in Compose and `http://localhost:11434` for a directly
+launched Java service. Windows host Ollama normally listens only on loopback;
+Podman may be unable to reach it through `host.containers.internal`, so the
+container profile is the default. `AI_REQUEST_TIMEOUT` defaults to 120 seconds;
+`AI_SERVICE_TIMEOUT` defaults to 130 seconds for the API. Temperature and output
+token limits are configurable with `AI_TEMPERATURE` and `AI_MAX_TOKENS`.
+
+### Preview, approval, and execution
+
+```powershell
+$body = @{ prompt = 'Create a workflow that downloads customer orders, validates them, generates invoices in parallel, uploads them and sends a notification.' } | ConvertTo-Json
+$proposal = Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/api/v1/ai/workflows/generate' -ContentType 'application/json' -Body $body -TimeoutSec 150
+$proposal | ConvertTo-Json -Depth 20
+```
+
+Inspect the tasks and validation result. Retrieve the same preview with
+`GET /api/v1/ai/workflows/proposals/{proposalId}`. Invalid graphs remain visible
+with `validation.valid = false` and deterministic errors; they cannot be approved.
+After reviewing a valid preview:
+
+```powershell
+$workflow = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/ai/workflows/proposals/$($proposal.proposalId)/approve"
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/workflows/$($workflow.id)"
+# Execution is a separate normal API request.
+$job = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/workflows/$($workflow.id)/jobs" -ContentType 'application/json' -Body '{"name":"ai-workflow-demo"}'
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/jobs/$($job.id)"
+```
+
+Invalid user requests return 400, malformed model output returns 422, and provider
+unavailability/timeouts return 503. Normal workflow APIs continue operating during
+AI outages. Model calls have bounded context/output and no automatic retries;
+logs omit full prompts and raw provider errors.
+
+The optional smoke script previews by default and can reuse an inspected proposal
+without another model call:
+
+```powershell
+.\scripts\ai-workflow-smoke.ps1
+.\scripts\ai-workflow-smoke.ps1 -ProposalId '<id from preview>' -Approve -Execute
+```
+
+Workers currently support only simulated `NOOP` tasks. Names describe intended
+business operations; they do not download orders or generate invoices. Parallelism
+is a fixed DAG, without schedules or dynamic fan-out. Human review remains
+necessary: a valid graph does not guarantee the requested business semantics.
+Authentication/tenant isolation and expired-proposal cleanup are deferred. RAG,
+failure analysis, copilot, optimization, and frontend AI are outside this phase.
+
+Verified on 2026-10-04: 54 unit tests and 18 Podman integration tests passed. The
+real `qwen2.5-coder:7b` model generated the six-task orders DAG with two invoice
+branches and a join; all tasks completed after explicit approval and execution.
+No workflow template existed before approval. Duplicate approval returned 409;
+with Ollama stopped, generation returned 503 while a manual workflow completed.
+The successful CPU-only model call took about 78 seconds; local latency varies.
 
 ## Architecture
 
@@ -236,7 +314,34 @@ curl -s -X POST http://localhost:8080/api/v1/jobs \
 
 ## Observability
 
-All services expose Prometheus metrics at `/actuator/prometheus`.
+The API, AI service, monitor, and workers expose Prometheus metrics at
+`/actuator/prometheus`. The scheduler does not currently expose Actuator metrics.
+
+Open the provisioned [Conductor application requests dashboard](http://localhost:3000/d/conductor-requests)
+in Grafana (`admin` / `admin` for the local stack). It shows request counts and
+rates, routes/methods/status codes, HTTP errors, API/AI p95 latency, and AI
+generation counts, failures, and duration. Use the service selector to focus on
+`loom-api` or `loom-ai`. Health checks and Prometheus scrapes are excluded from
+business request panels. Routes use templates rather than individual workflow IDs.
+
+Prometheus scrapes and the dashboard refresh every 15 seconds; rates need at
+least two samples. HTTP timers record completed requests, while the AI request
+counter increments when a generation call starts. Latency histograms include
+calls up to 180 seconds. No prompts or request bodies are sent to Grafana.
+AI latency cards summarize calls since the AI process started, so a single
+generation is visible; request rates use a rolling window. Counters reset when
+services restart.
+
+To see traffic without invoking a model or modifying workflows:
+
+```powershell
+1..20 | ForEach-Object {
+    Invoke-RestMethod 'http://localhost:8080/api/v1/jobs/7975a135-15f6-46fb-b928-e2f84afefa40' | Out-Null
+}
+```
+
+Replace the demo job ID with one from your own workflow execution. The dashboard
+is provisioned from repository configuration; no manual import is required.
 
 Key metrics:
 
@@ -246,6 +351,11 @@ Key metrics:
 | `loom_tasks_completed_total` | Tasks completed, tagged by `taskName` |
 | `loom_tasks_failed_total` | Tasks failed, tagged by `taskName` |
 | `loom_task_execution_duration_seconds` | Task duration histogram, tagged by `taskName` + `outcome` |
+| `http_server_requests_seconds_count` | Completed HTTP requests by route, method, and status |
+| `http_server_requests_seconds_bucket` | HTTP latency histogram in the API and AI service |
+| `ai_requests_total` | Model generation requests |
+| `ai_request_failures_total` | Model generation failures |
+| `ai_request_duration_seconds_bucket` | AI generation latency histogram |
 
 ---
 
