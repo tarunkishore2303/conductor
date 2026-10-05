@@ -35,6 +35,17 @@ public class TaskExecution {
 
     private Instant completedAt;
 
+    /** Zero-based attempt number; null for records created before evidence capture. */
+    private Integer attemptNumber;
+
+    @Column(length = 255)
+    private String errorType;
+
+    @Column(length = 2048)
+    private String errorMessage;
+
+    private Instant retryScheduledAt;
+
     @PrePersist
     void onPersist() {
         if (id == null) id = UUID.randomUUID();

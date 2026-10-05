@@ -13,6 +13,7 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -90,6 +91,11 @@ class TaskExecutorServiceTest {
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(kafka).send(eq(TaskExecutorService.TASK_RESULTS_TOPIC), eq(taskId.toString()), captor.capture());
         assertThat(((TaskResultEvent) captor.getValue()).status()).isEqualTo(TaskStatus.COMPLETE);
+        ArgumentCaptor<TaskExecution> execution = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(execution.capture());
+        assertThat(execution.getValue().getAttemptNumber()).isZero();
+        assertThat(execution.getValue().getCompletedAt()).isNotNull();
+        assertThat(execution.getValue().getErrorMessage()).isNull();
     }
 
     @Test
@@ -105,6 +111,12 @@ class TaskExecutorServiceTest {
 
         // Still has retries — no dead-letter result published yet
         verify(kafka, never()).send(eq(TaskExecutorService.TASK_RESULTS_TOPIC), any(), any());
+        ArgumentCaptor<TaskExecution> execution = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(execution.capture());
+        assertThat(execution.getValue().getStatus()).isEqualTo(TaskStatus.FAILED);
+        assertThat(execution.getValue().getErrorType()).isEqualTo(RuntimeException.class.getName());
+        assertThat(execution.getValue().getErrorMessage()).isEqualTo("simulated failure");
+        assertThat(execution.getValue().getRetryScheduledAt()).isAfter(execution.getValue().getCompletedAt());
     }
 
     @Test
@@ -114,13 +126,23 @@ class TaskExecutorServiceTest {
         when(taskRepo.findById(taskId)).thenReturn(Optional.of(pendingTask()));
         when(taskRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(executionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        doThrow(new RuntimeException("simulated failure")).when(taskHandler).execute(any());
+        doThrow(new RuntimeException("password=secret simulated failure")).when(taskHandler).execute(any());
 
         service.process(new TaskEvent(jobId, taskId, "task-a", 3, 3));
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(kafka).send(eq(TaskExecutorService.TASK_RESULTS_TOPIC), eq(taskId.toString()), captor.capture());
         assertThat(((TaskResultEvent) captor.getValue()).status()).isEqualTo(TaskStatus.DEAD_LETTERED);
+        assertThat(((TaskResultEvent) captor.getValue()).errorMessage()).doesNotContain("secret");
+        ArgumentCaptor<Task> task = ArgumentCaptor.forClass(Task.class);
+        verify(taskRepo, atLeastOnce()).save(task.capture());
+        assertThat(task.getValue().getRetryCount()).isEqualTo(3);
+        assertThat(task.getValue().getDeadLetteredAt()).isNotNull();
+        ArgumentCaptor<TaskExecution> execution = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(execution.capture());
+        assertThat(execution.getValue().getAttemptNumber()).isEqualTo(3);
+        assertThat(execution.getValue().getErrorMessage()).contains("[REDACTED]").doesNotContain("secret");
+        assertThat(execution.getValue().getRetryScheduledAt()).isNull();
     }
 
     @Test
@@ -141,5 +163,22 @@ class TaskExecutorServiceTest {
         service.process(new TaskEvent(jobId, taskId, "task-a", 3, 0));
 
         verify(taskHandler, never()).execute(any());
+    }
+
+    @Test
+    void terminalResultIsPublishedOnlyAfterCommit() {
+        when(taskRepo.findJobStatusByTaskId(taskId)).thenReturn(Optional.of(JobStatus.RUNNING.name()));
+        when(taskRepo.findById(taskId)).thenReturn(Optional.of(pendingTask()));
+        when(taskRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(executionRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.process(new TaskEvent(jobId, taskId, "task-a", 0, 0));
+            verify(kafka, never()).send(anyString(), anyString(), any());
+            TransactionSynchronizationManager.getSynchronizations().forEach(sync -> sync.afterCommit());
+            verify(kafka).send(eq(TaskExecutorService.TASK_RESULTS_TOPIC), eq(taskId.toString()), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
     }
 }

@@ -66,6 +66,7 @@ class TaskExecutionIT {
         // Use Hibernate DDL instead of Flyway (worker has no migration scripts)
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
         registry.add("spring.flyway.enabled", () -> "false");
+        registry.add("conductor.demo.failures-enabled", () -> "true");
     }
 
     @Autowired WorkerTaskRepository taskRepo;
@@ -177,5 +178,44 @@ class TaskExecutionIT {
         int count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM task_executions WHERE task_id = ?", Integer.class, taskId);
         assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void failedDemoTaskPersistsAttemptTimelineAndDeadLetterEvidenceBeforeResult() {
+        resultConsumer = buildResultConsumer();
+        UUID taskId = insertJobAndTask("demoConnectionTimeout");
+        jdbc.update("UPDATE tasks SET max_retries = 2 WHERE id = ?", taskId);
+        UUID jobId = UUID.fromString(jdbc.queryForObject(
+                "SELECT job_id FROM tasks WHERE id = ?", String.class, taskId));
+        kafkaTemplate.send("task-queue", taskId.toString(),
+                new TaskEvent(jobId, taskId, "demoConnectionTimeout", 2, 0));
+
+        Awaitility.await().atMost(25, TimeUnit.SECONDS).untilAsserted(() -> {
+            ConsumerRecords<String, TaskResultEvent> records = resultConsumer.poll(Duration.ofMillis(500));
+            boolean found = false;
+            for (var record : records) {
+                if (taskId.toString().equals(record.key())
+                        && record.value().status() == TaskStatus.DEAD_LETTERED) {
+                    // The Kafka result is emitted after the evidence transaction commits.
+                    var task = taskRepo.findById(taskId).orElseThrow();
+                    assertThat(task.getStatus()).isEqualTo(TaskStatus.DEAD_LETTERED);
+                    assertThat(task.getRetryCount()).isEqualTo(2);
+                    assertThat(task.getDeadLetteredAt()).isNotNull();
+                    assertThat(record.value().errorMessage()).isEqualTo("Demo dependency connection timed out");
+                    found = true;
+                }
+            }
+            assertThat(found).isTrue();
+        });
+        assertThat(jdbc.queryForList(
+                "SELECT attempt_number FROM task_executions WHERE task_id = ? ORDER BY attempt_number",
+                Integer.class, taskId)).containsExactly(0, 1, 2);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM task_executions WHERE task_id = ? AND error_message IS NOT NULL "
+                        + "AND error_type = 'java.net.ConnectException' AND completed_at IS NOT NULL",
+                Integer.class, taskId)).isEqualTo(3);
+        assertThat(jdbc.queryForObject(
+                "SELECT count(*) FROM task_executions WHERE task_id = ? AND retry_scheduled_at IS NOT NULL",
+                Integer.class, taskId)).isEqualTo(2);
     }
 }
