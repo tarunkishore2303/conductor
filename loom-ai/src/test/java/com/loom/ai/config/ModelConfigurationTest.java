@@ -11,6 +11,8 @@ class ModelConfigurationTest {
         var properties = new AiProperties(false, "http://localhost:11434", "qwen2.5-coder:7b", 0, Duration.ofSeconds(1), 100);
         var model = new ModelConfiguration().workflowGenerationModel(properties);
         assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiProviderUnavailableException.class);
+        var interpretationModel = new ModelConfiguration().failureInterpretationModel(properties);
+        assertThatThrownBy(() -> interpretationModel.analyze(null)).isInstanceOf(AiProviderUnavailableException.class);
     }
     @Test
     void rejectsUnboundedConfiguration() {
