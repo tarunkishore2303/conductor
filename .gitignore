@@ -40,3 +40,7 @@ out/
 .env
 .env.*
 !.env.example
+
+# Local Ollama delegation artifacts and usage records.
+.local-delegation/
+__pycache__/

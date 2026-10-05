@@ -115,6 +115,48 @@ No workflow template existed before approval. Duplicate approval returned 409;
 with Ollama stopped, generation returned 503 while a manual workflow completed.
 The successful CPU-only model call took about 78 seconds; local latency varies.
 
+## AI Failure Analysis
+
+Failure analysis keeps execution facts separate from model interpretation. All AI
+runs locally through Ollama; no cloud APIs or API keys are used.
+
+```mermaid
+flowchart LR
+    W[Worker failure] --> E[Persisted attempt and DLQ evidence]
+    E --> C[loom-api: bounded sanitized context]
+    C --> A[loom-ai: Ollama structured interpretation]
+    A --> P[loom-api: immutable analysis snapshot]
+    P --> R[API: facts and interpretation separately]
+```
+
+`POST /api/v1/ai/runs/{jobId}/analyze-failure` analyzes a failed, settled run.
+`GET /api/v1/ai/runs/{jobId}/failure-analysis` retrieves the stored analysis without
+calling Ollama. Repeating POST for an unchanged context reuses the persisted result.
+Facts include recorded attempts, errors, timestamps, planned retry times, and DLQ
+status. `interpretation` contains a likely cause, confidence, explanation, and
+recommended actions. Confidence is a model assessment, not a calibrated probability.
+
+The API retains database ownership; loom-ai receives bounded facts and has no
+orchestration database credentials. V4 adds nullable execution evidence for backwards
+compatibility; V5 stores analyses with a unique run/context fingerprint. Legacy
+records may lack errors or attempt numbers. Console logs, workflow-template linkage,
+external service health, and historical Kafka payloads are not fabricated as facts.
+Unavailable evidence is explicit; a run without usable failure evidence is rejected.
+
+For the controlled local demo, explicitly set `DEMO_FAILURES_ENABLED=true` when
+starting both workers. Only `demoConnectionTimeout`, `demoDownstreamTimeout`, and
+`demoInvalidJson` trigger fixed simulated errors; the default is disabled. Run:
+
+```powershell
+python scripts/failure-analysis-smoke.py
+```
+
+The smoke script creates a job, checks three failed attempts and terminal DLQ
+evidence, requests analysis, and verifies cached reuse. Normal execution remains
+separate from analysis. Retry scheduling still uses an in-memory executor; after-commit
+Kafka publication avoids reading uncommitted evidence but is not a durable outbox.
+Existing DLQ replay limitations are not repaired by AI analysis.
+
 ## Architecture
 
 ```

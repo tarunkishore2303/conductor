@@ -148,6 +148,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
+      DEMO_FAILURES_ENABLED: ${DEMO_FAILURES_ENABLED:-false}
       SERVER_PORT: 8081
     depends_on:
       loom-api:
@@ -166,6 +167,7 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
+      DEMO_FAILURES_ENABLED: ${DEMO_FAILURES_ENABLED:-false}
       SERVER_PORT: 8082
     depends_on:
       loom-api:
