@@ -10,6 +10,7 @@ import jakarta.validation.Validator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 import tools.jackson.databind.json.JsonMapper;
 import java.util.UUID;
 
@@ -21,14 +22,19 @@ public class FailureInterpretationService {
     private final Validator validator;
     private final AiProperties properties;
     private final MeterRegistry metrics;
+    private final int maxContextChars;
 
     public FailureInterpretationService(FailureInterpretationModel model, FailureContextSanitizer sanitizer,
-                                        Validator validator, AiProperties properties, MeterRegistry metrics) {
+                                        Validator validator, AiProperties properties, MeterRegistry metrics,
+                                        @Value("${conductor.ai.failure-context-max-chars:32768}") int maxContextChars) {
+        if (maxContextChars < 1 || maxContextChars > 65536)
+            throw new IllegalArgumentException("Failure context budget must be between 1 and 65536 characters");
         this.model = model;
         this.sanitizer = sanitizer;
         this.validator = validator;
         this.properties = properties;
         this.metrics = metrics;
+        this.maxContextChars = maxContextChars;
     }
 
     public FailureInterpretation analyze(FailureFactsRequest facts) {
@@ -37,8 +43,8 @@ public class FailureInterpretationService {
         }
         var sanitized = sanitizer.sanitize(facts);
         if (sanitized.tasks().stream().mapToInt(task -> task.attempts().size()).sum() > 300
-                || new JsonMapper().writeValueAsString(sanitized).length() > 32768) {
-            throw new AiInvalidRequestException("Execution context exceeds the 32768 character or 300 attempt limit.");
+                || new JsonMapper().writeValueAsString(sanitized).length() > maxContextChars) {
+            throw new AiInvalidRequestException("Execution context exceeds the " + maxContextChars + " character or 300 attempt limit.");
         }
         var sample = Timer.start(metrics);
         String correlation = UUID.randomUUID().toString();

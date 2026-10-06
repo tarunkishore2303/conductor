@@ -71,6 +71,7 @@ services:
       SPRING_DATASOURCE_PASSWORD: loom
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       CONDUCTOR_AI_BASE_URL: http://loom-ai:8085
+      AI_FAILURE_CONTEXT_MAX_CHARS: ${AI_FAILURE_CONTEXT_MAX_CHARS:-32768}
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_MODEL: ${AI_MODEL:-qwen2.5-coder:7b}
       CONDUCTOR_AI_TIMEOUT: ${AI_SERVICE_TIMEOUT:-130s}
@@ -118,6 +119,7 @@ services:
       AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-nomic-embed-text:v1.5}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       AI_REQUEST_TIMEOUT: ${AI_REQUEST_TIMEOUT:-120s}
+      AI_FAILURE_CONTEXT_MAX_CHARS: ${AI_FAILURE_CONTEXT_MAX_CHARS:-32768}
     # Independent of Postgres, Kafka, scheduler and workers.
     depends_on:
       ollama:

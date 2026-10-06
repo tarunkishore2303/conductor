@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import com.tarunkishore.loom_api.repository.AiFailureAnalysisRepository;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.BeforeEach;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -14,11 +15,10 @@ import java.util.*;
 import java.util.concurrent.*;
 
 class FailureAnalysisServiceTest {
-    final FailureContextCollector collector = mock(FailureContextCollector.class);
-    final FailureAnalysisClient client = mock(FailureAnalysisClient.class);
-    final AiFailureAnalysisRepository repo = mock(AiFailureAnalysisRepository.class);
-    final FailureAnalysisService service =
-            new FailureAnalysisService(collector, client, repo, JsonMapper.builder().build(), event -> {});
+    FailureContextCollector collector;
+    FailureAnalysisClient client;
+    AiFailureAnalysisRepository repo;
+    FailureAnalysisService service;
     final UUID job = UUID.randomUUID();
     final FailureContext facts =
             new FailureContext(job, "FAILED", List.of(), List.of("Logs unavailable"));
@@ -31,7 +31,19 @@ class FailureAnalysisServiceTest {
                             List.of("Review the handler")),
                     "fake");
 
+    @BeforeEach
     void setup() {
+        collector = mock(FailureContextCollector.class);
+        client = mock(FailureAnalysisClient.class);
+        repo = mock(AiFailureAnalysisRepository.class);
+        service = serviceWithBudget(32768);
+    }
+
+    private FailureAnalysisService serviceWithBudget(int budget) {
+        return new FailureAnalysisService(collector, client, repo, JsonMapper.builder().build(), event -> {}, budget);
+    }
+
+    void stubAnalysis() {
         when(collector.collect(job)).thenReturn(facts);
         when(repo.findByJobIdAndContextHash(eq(job), anyString())).thenReturn(Optional.empty());
         when(client.analyze(facts)).thenReturn(result);
@@ -40,7 +52,7 @@ class FailureAnalysisServiceTest {
 
     @Test
     void separatesFactsAndInterpretationAndCachesExactSnapshot() {
-        setup();
+        stubAnalysis();
         var analysis = service.analyze(job);
         assertThat(analysis.facts()).isEqualTo(facts);
         assertThat(analysis.interpretation().likelyCause()).isEqualTo("Simulated failure");
@@ -54,7 +66,7 @@ class FailureAnalysisServiceTest {
 
     @Test
     void malformedAndUnavailableResponsesNeverPersist() {
-        setup();
+        stubAnalysis();
         when(client.analyze(any())).thenReturn(new FailureAnalysisClient.Result(null, "fake"));
         assertThatThrownBy(() -> service.analyze(job)).isInstanceOf(AiOutputException.class);
         when(client.analyze(any())).thenThrow(new AiUnavailableException());
@@ -79,7 +91,7 @@ class FailureAnalysisServiceTest {
 
     @Test
     void simultaneousCallsCoalesceOneModelRequest() throws Exception {
-        setup();
+        stubAnalysis();
         var entered = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         when(client.analyze(any()))
@@ -112,5 +124,22 @@ class FailureAnalysisServiceTest {
                 .isInstanceOf(AiOutputException.class)
                 .hasMessageContaining("bounded");
         verifyNoInteractions(client, repo);
+    }
+
+    @Test
+    void configurableBudgetAcceptsExactBoundaryAndRejectsOneCharacterOver() {
+        when(collector.collect(job)).thenReturn(facts);
+        int length = JsonMapper.builder().build().writeValueAsString(facts).length();
+        assertThatThrownBy(() -> serviceWithBudget(length - 1).analyze(job))
+                .isInstanceOf(AiOutputException.class).hasMessageContaining("character");
+        verifyNoInteractions(client, repo);
+        stubAnalysis();
+        assertThat(serviceWithBudget(length).analyze(job).facts()).isEqualTo(facts);
+    }
+
+    @Test
+    void rejectsInvalidConfiguredBudget() {
+        assertThatThrownBy(() -> serviceWithBudget(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> serviceWithBudget(65537)).isInstanceOf(IllegalArgumentException.class);
     }
 }

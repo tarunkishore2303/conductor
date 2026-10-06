@@ -19,7 +19,7 @@ class FailureInterpretationServiceTest {
     private final FailureInterpretationModel model = mock(FailureInterpretationModel.class);
     private final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
     private final FailureInterpretationService service = new FailureInterpretationService(model, new FailureContextSanitizer(),
-            factory.getValidator(), new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics);
+            factory.getValidator(), new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics, 32768);
 
     @AfterEach
     void closeFactory() { factory.close(); }
@@ -72,6 +72,29 @@ class FailureInterpretationServiceTest {
         assertThatThrownBy(() -> service.analyze(facts("Unknown"))).isInstanceOf(AiProviderUnavailableException.class);
         assertThat(metrics.get("ai.request.failures").counter().count()).isEqualTo(1);
         assertThat(metrics.get("ai.request.duration").timer().count()).isEqualTo(1);
+    }
+
+    private FailureInterpretationService serviceWithBudget(int budget) {
+        return new FailureInterpretationService(model, new FailureContextSanitizer(), factory.getValidator(),
+                new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics, budget);
+    }
+
+    @Test
+    void configurableBudgetAcceptsExactBoundaryAndRejectsOneCharacterOver() {
+        var request = facts("Connection timed out");
+        int length = new tools.jackson.databind.json.JsonMapper().writeValueAsString(
+                new FailureContextSanitizer().sanitize(request)).length();
+        assertThatThrownBy(() -> serviceWithBudget(length - 1).analyze(request))
+                .isInstanceOf(AiInvalidRequestException.class).hasMessageContaining("character");
+        verifyNoInteractions(model);
+        when(model.analyze(any())).thenReturn(validInterpretation());
+        assertThat(serviceWithBudget(length).analyze(request)).isEqualTo(validInterpretation());
+    }
+
+    @Test
+    void rejectsInvalidConfiguredBudget() {
+        assertThatThrownBy(() -> serviceWithBudget(0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> serviceWithBudget(65537)).isInstanceOf(IllegalArgumentException.class);
     }
 
     private FailureInterpretation validInterpretation() {

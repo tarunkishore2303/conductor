@@ -5,6 +5,7 @@ import com.tarunkishore.loom_api.repository.AiFailureAnalysisRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,6 +25,7 @@ public class FailureAnalysisService {
     private final AiFailureAnalysisRepository repository;
     private final ObjectMapper mapper;
     private final ApplicationEventPublisher events;
+    private final int maxContextChars;
     private final ConcurrentHashMap<String, CompletableFuture<Analysis>> inFlight =
             new ConcurrentHashMap<>();
 
@@ -32,12 +34,16 @@ public class FailureAnalysisService {
             FailureAnalysisClient client,
             AiFailureAnalysisRepository repository,
             ObjectMapper mapper,
-            ApplicationEventPublisher events) {
+            ApplicationEventPublisher events,
+            @Value("${conductor.ai.failure-context-max-chars:32768}") int maxContextChars) {
+        if (maxContextChars < 1 || maxContextChars > 65536)
+            throw new IllegalArgumentException("Failure context budget must be between 1 and 65536 characters");
         this.collector = collector;
         this.client = client;
         this.repository = repository;
         this.mapper = mapper;
         this.events = events;
+        this.maxContextChars = maxContextChars;
     }
 
     // No transaction encloses the model request; only context reads and saves use short DB
@@ -45,8 +51,8 @@ public class FailureAnalysisService {
     public Analysis analyze(UUID jobId) {
         var facts = collector.collect(jobId);
         String json = mapper.writeValueAsString(facts);
-        if (json.length() > 32768)
-            throw new AiOutputException("Failure evidence exceeds the bounded analysis context");
+        if (json.length() > maxContextChars)
+            throw new AiOutputException("Failure evidence exceeds the bounded " + maxContextChars + " character analysis context");
         String hash = hash(json);
         var cached = repository.findByJobIdAndContextHash(jobId, hash);
         if (cached.isPresent()) return response(cached.get());
