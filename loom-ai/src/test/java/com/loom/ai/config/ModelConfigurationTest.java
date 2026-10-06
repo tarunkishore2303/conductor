@@ -13,6 +13,10 @@ class ModelConfigurationTest {
         assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiProviderUnavailableException.class);
         var interpretationModel = new ModelConfiguration().failureInterpretationModel(properties);
         assertThatThrownBy(() -> interpretationModel.analyze(null)).isInstanceOf(AiProviderUnavailableException.class);
+        var embeddings = new ModelConfiguration().incidentEmbeddingModel(properties, new AiEmbeddingProperties("nomic-embed-text:v1.5", 768));
+        assertThatThrownBy(() -> embeddings.embed("context")).isInstanceOf(AiProviderUnavailableException.class);
+        var synthesis = new ModelConfiguration().incidentSynthesisModel(properties);
+        assertThatThrownBy(() -> synthesis.synthesize(null)).isInstanceOf(AiProviderUnavailableException.class);
     }
     @Test
     void rejectsUnboundedConfiguration() {
