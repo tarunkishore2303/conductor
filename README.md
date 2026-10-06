@@ -136,6 +136,17 @@ Facts include recorded attempts, errors, timestamps, planned retry times, and DL
 status. `interpretation` contains a likely cause, confidence, explanation, and
 recommended actions. Confidence is a model assessment, not a calibrated probability.
 
+`AI_FAILURE_CONTEXT_MAX_CHARS` sets the serialized failure-context JSON character
+budget in both the API and AI service (default 32,768; allowed 1–65,536). It is a
+character limit, not a model-token limit. Compose passes the same value to both
+services; when starting them separately, configure the same value in each.
+
+For interactive requests in VS Code, open [scripts/conductor-demo.http](scripts/conductor-demo.http)
+with the REST Client extension (`humao.rest-client`) and click **Send Request**.
+The collection includes existing-demo reads and fresh workflow/failure flows with
+captured response IDs. Send each section in order and wait for the indicated terminal
+run state before analysis; approval and execution remain separate requests.
+
 The API retains database ownership; loom-ai receives bounded facts and has no
 orchestration database credentials. V4 adds nullable execution evidence for backwards
 compatibility; V5 stores analyses with a unique run/context fingerprint. Legacy
@@ -501,7 +512,7 @@ Key metrics:
 ./gradlew integrationTest
 ```
 
-Phase 4–5 verification on Java 25 / Podman passed `./gradlew build` (126 unit tests),
+Phase 4–5 verification on Java 25 / Podman passed `./gradlew build` (130 unit tests),
 `./gradlew :loom-api:integrationTest :loom-worker:integrationTest` (31 integration
 tests), and `python -m unittest discover -s scripts/tests -v` (12 smoke-helper tests).
 Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka,
