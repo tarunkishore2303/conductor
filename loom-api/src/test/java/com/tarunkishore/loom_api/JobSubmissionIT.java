@@ -42,7 +42,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class JobSubmissionIT {
 
     @Container
-    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15")
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer(
+            DockerImageName.parse("pgvector/pgvector:0.8.7-pg15").asCompatibleSubstituteFor("postgres"))
         .withDatabaseName("loom")
         .withUsername("loom")
         .withPassword("loom");

@@ -11,6 +11,10 @@ conductor:
     temperature: ${AI_TEMPERATURE:0.0}
     timeout: ${AI_REQUEST_TIMEOUT:120s}
     max-tokens: ${AI_MAX_TOKENS:4096}
+    failure-context-max-chars: ${AI_FAILURE_CONTEXT_MAX_CHARS:32768}
+    embedding:
+      model: ${AI_EMBEDDING_MODEL:nomic-embed-text:v1.5}
+      dimensions: ${AI_EMBEDDING_DIMENSIONS:768}
 management:
   metrics:
     distribution:

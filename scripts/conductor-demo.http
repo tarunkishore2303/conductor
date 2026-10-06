@@ -1,0 +1,195 @@
+# VS Code REST Client (humao.rest-client): click "Send Request" above a request.
+# Send requests individually, in order within each section. Named responses capture IDs.
+# Workers must use DEMO_FAILURES_ENABLED=true for the three fixed failure tasks.
+# AI requests may take up to 130 seconds on a cold local Ollama model.
+# Quick-demo IDs reference this machine's existing database; use fresh flows after a reset.
+@baseUrl = http://localhost:8080
+@aiUrl = http://localhost:8085
+@verifiedFailedRun = 3aa118dc-d9ea-48ce-b9ba-1b24e22882d4
+@verifiedAnalysis = b746b2a4-7346-4ade-b667-fff197a28f38
+
+### API health
+GET {{baseUrl}}/actuator/health
+
+### AI health
+GET {{aiUrl}}/actuator/health
+
+### Quick demo: read the persisted failure from the verified local demo
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/failure-analysis
+
+### Quick demo: historical timeout matches, excluding the current run
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/similar-incidents?topK=3
+
+### Quick demo: evidence-backed synthesis (cached when evidence is unchanged)
+POST {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/similar-incidents/synthesize?topK=3
+Content-Type: application/json
+
+{}
+
+### Quick demo: exact factual snapshot referenced by its analysis ID
+GET {{baseUrl}}/api/v1/ai/failure-analyses/{{verifiedAnalysis}}
+
+### Manual workflow: persist a normal DAG; no execution yet
+# @name createWorkflow
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{
+  "name": "VS Code parallel invoice demo",
+  "description": "Simulated tasks with parallel branches and a join",
+  "defaultFailurePolicy": "FAIL_FAST",
+  "tasks": [
+    {"taskId": "download", "name": "downloadOrders", "maxRetries": 2, "dependsOn": []},
+    {"taskId": "validate", "name": "validateOrders", "maxRetries": 2, "dependsOn": ["download"]},
+    {"taskId": "invoiceA", "name": "invoiceBatch1", "maxRetries": 2, "dependsOn": ["validate"]},
+    {"taskId": "invoiceB", "name": "invoiceBatch2", "maxRetries": 2, "dependsOn": ["validate"]},
+    {"taskId": "upload", "name": "uploadInvoices", "maxRetries": 2, "dependsOn": ["invoiceA", "invoiceB"]},
+    {"taskId": "notify", "name": "sendNotification", "maxRetries": 2, "dependsOn": ["upload"]}
+  ]
+}
+
+### Retrieve the persisted manual workflow
+GET {{baseUrl}}/api/v1/workflows/{{createWorkflow.response.body.$.id}}
+
+### Explicitly execute the manual workflow through the existing engine
+# @name executeWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{createWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name": "VS Code manual execution"}
+
+### Check execution; repeat until status is COMPLETE
+GET {{baseUrl}}/api/v1/jobs/{{executeWorkflow.response.body.$.id}}
+
+### AI generation: preview only; inspect validation.valid and the DAG
+# @name generateWorkflow
+POST {{baseUrl}}/api/v1/ai/workflows/generate
+Content-Type: application/json
+
+{"prompt": "Create a simulated NOOP workflow that downloads customer orders, validates them, generates two invoice batches in parallel, uploads them after both batches finish, and sends a notification. Use only supported NOOP tasks."}
+
+### Retrieve the preview; no workflow is persisted yet
+GET {{baseUrl}}/api/v1/ai/workflows/proposals/{{generateWorkflow.response.body.$.proposalId}}
+
+### Explicit approval: send only after reviewing a valid proposal
+# @name approveWorkflow
+POST {{baseUrl}}/api/v1/ai/workflows/proposals/{{generateWorkflow.response.body.$.proposalId}}/approve
+
+### Retrieve the approved normal workflow
+GET {{baseUrl}}/api/v1/workflows/{{approveWorkflow.response.body.$.id}}
+
+### Explicitly execute the approved workflow; approval itself does not execute it
+# @name executeApprovedWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{approveWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name": "VS Code approved AI workflow execution"}
+
+### Inspect execution
+GET {{baseUrl}}/api/v1/jobs/{{executeApprovedWorkflow.response.body.$.id}}
+
+### Incident A: create a controlled connection timeout
+# @name createTimeoutA
+POST {{baseUrl}}/api/v1/jobs
+Content-Type: application/json
+
+{"name": "VS Code timeout A", "failurePolicy": "FAIL_FAST", "tasks": [{"taskId": "timeout", "name": "demoConnectionTimeout", "maxRetries": 2, "dependsOn": []}]}
+
+### Repeat until FAILED; task should be DEAD_LETTERED with retryCount 2
+GET {{baseUrl}}/api/v1/jobs/{{createTimeoutA.response.body.$.id}}
+
+### Analyze A only after its failed execution has settled
+# @name analyzeTimeoutA
+POST {{baseUrl}}/api/v1/ai/runs/{{createTimeoutA.response.body.$.id}}/analyze-failure
+Content-Type: application/json
+
+{}
+
+### Explicitly index A; safe to repeat (insertedCount becomes 0)
+POST {{baseUrl}}/api/v1/ai/failure-analyses/{{analyzeTimeoutA.response.body.$.analysisId}}/index
+Content-Type: application/json
+
+{}
+
+### Incident B: similar downstream timeout
+# @name createTimeoutB
+POST {{baseUrl}}/api/v1/jobs
+Content-Type: application/json
+
+{"name": "VS Code timeout B", "failurePolicy": "FAIL_FAST", "tasks": [{"taskId": "timeout", "name": "demoDownstreamTimeout", "maxRetries": 2, "dependsOn": []}]}
+
+### Repeat until FAILED before analyzing
+GET {{baseUrl}}/api/v1/jobs/{{createTimeoutB.response.body.$.id}}
+
+### Analyze B; repeating reuses the stored analysis ID and facts
+# @name analyzeTimeoutB
+POST {{baseUrl}}/api/v1/ai/runs/{{createTimeoutB.response.body.$.id}}/analyze-failure
+Content-Type: application/json
+
+{}
+
+### Explicitly index B before searching
+POST {{baseUrl}}/api/v1/ai/failure-analyses/{{analyzeTimeoutB.response.body.$.analysisId}}/index
+Content-Type: application/json
+
+{}
+
+### Search B: inspect scores and real run/task/analysis references
+GET {{baseUrl}}/api/v1/ai/runs/{{createTimeoutB.response.body.$.id}}/similar-incidents?topK=3
+
+### Ask whether this happened before; citations must come from retrieved matches
+POST {{baseUrl}}/api/v1/ai/runs/{{createTimeoutB.response.body.$.id}}/similar-incidents/synthesize?topK=3
+Content-Type: application/json
+
+{}
+
+### Read B's persisted facts and interpretation, without a model call
+GET {{baseUrl}}/api/v1/ai/runs/{{createTimeoutB.response.body.$.id}}/failure-analysis
+
+### Inspect current DLQ evidence; replay is deliberately omitted from this collection
+GET {{baseUrl}}/api/v1/dlq?page=0&size=20
+
+### Optional unrelated incident: JSON failure
+# @name createJsonFailure
+POST {{baseUrl}}/api/v1/jobs
+Content-Type: application/json
+
+{"name": "VS Code JSON failure", "failurePolicy": "FAIL_FAST", "tasks": [{"taskId": "json", "name": "demoInvalidJson", "maxRetries": 2, "dependsOn": []}]}
+
+### Repeat until FAILED
+GET {{baseUrl}}/api/v1/jobs/{{createJsonFailure.response.body.$.id}}
+
+### Analyze JSON failure
+# @name analyzeJsonFailure
+POST {{baseUrl}}/api/v1/ai/runs/{{createJsonFailure.response.body.$.id}}/analyze-failure
+Content-Type: application/json
+
+{}
+
+### Index JSON failure
+POST {{baseUrl}}/api/v1/ai/failure-analyses/{{analyzeJsonFailure.response.body.$.analysisId}}/index
+Content-Type: application/json
+
+{}
+
+### JSON failures should not retrieve the timeout incidents at threshold 0.93
+# Other JSON failures may match if you have run this section before.
+GET {{baseUrl}}/api/v1/ai/runs/{{createJsonFailure.response.body.$.id}}/similar-incidents?topK=3
+
+### Invalid top-K should return 400
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/similar-incidents?topK=6
+
+### Successful execution cannot be analyzed as a failure (409)
+POST {{baseUrl}}/api/v1/ai/runs/{{executeWorkflow.response.body.$.id}}/analyze-failure
+Content-Type: application/json
+
+{}
+
+### Missing run should return 404
+GET {{baseUrl}}/api/v1/jobs/00000000-0000-0000-0000-000000000000
+
+### API request/search metrics; Grafana: http://localhost:3000/d/conductor-requests
+GET {{baseUrl}}/actuator/prometheus
+
+### Local model operation metrics
+GET {{aiUrl}}/actuator/prometheus

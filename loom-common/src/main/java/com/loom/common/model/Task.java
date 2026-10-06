@@ -46,6 +46,8 @@ public class Task {
     @Column(nullable = false)
     private Instant updatedAt;
 
+    private Instant deadLetteredAt;
+
     @Version
     private Long version;
 

@@ -3,6 +3,7 @@ package com.loom.worker.service;
 import com.loom.common.event.TaskEvent;
 import com.loom.common.event.TaskResultEvent;
 import com.loom.common.model.*;
+import com.loom.common.security.FailureEvidenceSanitizer;
 import com.loom.worker.repository.TaskExecutionJpaRepository;
 import com.loom.worker.repository.WorkerTaskRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -15,6 +16,8 @@ import org.slf4j.MDC;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -100,9 +103,11 @@ public class TaskExecutorService {
         execution.setTask(task);
         execution.setExecutionId(executionId);
         execution.setStatus(TaskStatus.RUNNING);
+        execution.setAttemptNumber(event.attemptNumber());
         executionRepo.save(execution);
 
         task.setStatus(TaskStatus.RUNNING);
+        task.setRetryCount(event.attemptNumber());
         taskRepo.save(task);
 
         Timer.Sample timerSample = Timer.start(meterRegistry);
@@ -120,14 +125,17 @@ public class TaskExecutorService {
                 "taskName", event.taskName(), "outcome", "success"));
             meterRegistry.counter("loom.tasks.completed", "taskName", event.taskName()).increment();
 
-            kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
-                new TaskResultEvent(event.jobId(), event.taskId(), executionId, TaskStatus.COMPLETE, null));
+            afterCommit(() -> kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
+                new TaskResultEvent(event.jobId(), event.taskId(), executionId, TaskStatus.COMPLETE, null)));
 
         } catch (Exception ex) {
-            log.error("Task {} failed on attempt {}: {}", event.taskId(), event.attemptNumber(), ex.getMessage());
+            String safeError = FailureEvidenceSanitizer.sanitize(ex.getMessage());
+            log.error("Task {} failed on attempt {}: {}", event.taskId(), event.attemptNumber(), safeError);
 
             execution.setStatus(TaskStatus.FAILED);
             execution.setCompletedAt(Instant.now());
+            execution.setErrorType(ex.getClass().getName());
+            execution.setErrorMessage(safeError);
             executionRepo.save(execution);
 
             timerSample.stop(meterRegistry.timer("loom.task.execution.duration",
@@ -136,21 +144,24 @@ public class TaskExecutorService {
 
             int nextAttempt = event.attemptNumber() + 1;
             if (nextAttempt <= event.maxRetries()) {
-                scheduleRetry(event, nextAttempt);
+                long delaySeconds = retryDelaySeconds(event);
+                execution.setRetryScheduledAt(Instant.now().plusSeconds(delaySeconds));
+                afterCommit(() -> scheduleRetry(event, nextAttempt));
                 task.setStatus(TaskStatus.PENDING);
                 taskRepo.save(task);
             } else {
                 task.setStatus(TaskStatus.DEAD_LETTERED);
+                task.setDeadLetteredAt(Instant.now());
                 taskRepo.save(task);
-                kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
+                afterCommit(() -> kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
                     new TaskResultEvent(event.jobId(), event.taskId(), executionId,
-                        TaskStatus.DEAD_LETTERED, ex.getMessage()));
+                        TaskStatus.DEAD_LETTERED, safeError)));
             }
         }
     }
 
     private void scheduleRetry(TaskEvent event, int nextAttempt) {
-        long delaySeconds = (long) Math.pow(2, event.attemptNumber());
+        long delaySeconds = retryDelaySeconds(event);
         log.info("Scheduling retry {} for task {} in {}s", nextAttempt, event.taskId(), delaySeconds);
         retryExecutor.schedule(() -> {
             MDC.put("jobId", event.jobId().toString());
@@ -163,5 +174,22 @@ public class TaskExecutorService {
                 MDC.clear();
             }
         }, delaySeconds, TimeUnit.SECONDS);
+    }
+
+    private static long retryDelaySeconds(TaskEvent event) {
+        return (long) Math.pow(2, event.attemptNumber());
+    }
+
+    private void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 }
