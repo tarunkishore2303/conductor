@@ -4,6 +4,9 @@ import com.tarunkishore.loom_api.repository.AiFailureAnalysisRepository;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.context.ApplicationEventPublisher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -15,10 +18,12 @@ import java.util.concurrent.*;
 
 @Service
 public class FailureAnalysisService {
+    private static final Logger log = LoggerFactory.getLogger(FailureAnalysisService.class);
     private final FailureContextCollector collector;
     private final FailureAnalysisClient client;
     private final AiFailureAnalysisRepository repository;
     private final ObjectMapper mapper;
+    private final ApplicationEventPublisher events;
     private final ConcurrentHashMap<String, CompletableFuture<Analysis>> inFlight =
             new ConcurrentHashMap<>();
 
@@ -26,11 +31,13 @@ public class FailureAnalysisService {
             FailureContextCollector collector,
             FailureAnalysisClient client,
             AiFailureAnalysisRepository repository,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            ApplicationEventPublisher events) {
         this.collector = collector;
         this.client = client;
         this.repository = repository;
         this.mapper = mapper;
+        this.events = events;
     }
 
     // No transaction encloses the model request; only context reads and saves use short DB
@@ -88,6 +95,11 @@ public class FailureAnalysisService {
                                 .orElseThrow(() -> e);
             }
             promise.complete(analysis);
+            try {
+                events.publishEvent(new FailureAnalysisStored(analysis.analysisId()));
+            } catch (RuntimeException exception) {
+                log.warn("Incident indexing dispatch failed analysisId={}; explicit retry is available", analysis.analysisId());
+            }
             return analysis;
         } catch (RuntimeException e) {
             promise.completeExceptionally(e);
@@ -105,6 +117,11 @@ public class FailureAnalysisService {
                         () ->
                                 new NoSuchElementException(
                                         "No stored failure analysis for this run"));
+    }
+
+    public Analysis getById(UUID analysisId) {
+        return repository.findById(analysisId).map(this::response)
+                .orElseThrow(() -> new NoSuchElementException("Stored failure analysis not found"));
     }
 
     private Analysis response(AiFailureAnalysis row) {

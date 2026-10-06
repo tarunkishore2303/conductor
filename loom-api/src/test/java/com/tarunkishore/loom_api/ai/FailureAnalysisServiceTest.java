@@ -18,7 +18,7 @@ class FailureAnalysisServiceTest {
     final FailureAnalysisClient client = mock(FailureAnalysisClient.class);
     final AiFailureAnalysisRepository repo = mock(AiFailureAnalysisRepository.class);
     final FailureAnalysisService service =
-            new FailureAnalysisService(collector, client, repo, JsonMapper.builder().build());
+            new FailureAnalysisService(collector, client, repo, JsonMapper.builder().build(), event -> {});
     final UUID job = UUID.randomUUID();
     final FailureContext facts =
             new FailureContext(job, "FAILED", List.of(), List.of("Logs unavailable"));
