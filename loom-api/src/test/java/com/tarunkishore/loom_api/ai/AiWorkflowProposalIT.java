@@ -21,6 +21,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +39,8 @@ import static org.mockito.Mockito.reset;
 @Import(AiWorkflowProposalIT.FakeConfig.class)
 class AiWorkflowProposalIT {
     @Container
-    static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15");
+    static final PostgreSQLContainer postgres = new PostgreSQLContainer(
+            DockerImageName.parse("pgvector/pgvector:0.8.7-pg15").asCompatibleSubstituteFor("postgres"));
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry r) {
         r.add("spring.datasource.url", postgres::getJdbcUrl);

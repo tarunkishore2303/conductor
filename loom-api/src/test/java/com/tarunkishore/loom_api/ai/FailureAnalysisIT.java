@@ -15,6 +15,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -25,7 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Testcontainers
 @Import(FailureAnalysisIT.Fakes.class)
 class FailureAnalysisIT {
-    @Container static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15");
+    @Container static final PostgreSQLContainer postgres = new PostgreSQLContainer(
+            DockerImageName.parse("pgvector/pgvector:0.8.7-pg15").asCompatibleSubstituteFor("postgres"));
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry r) {
