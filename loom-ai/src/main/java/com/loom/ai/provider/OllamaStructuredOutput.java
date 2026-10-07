@@ -15,9 +15,12 @@ import tools.jackson.databind.cfg.CoercionInputShape;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.type.LogicalType;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Shared provider mechanics; domain-specific validation stays in its service. */
 public class OllamaStructuredOutput {
+    private static final Logger log = LoggerFactory.getLogger(OllamaStructuredOutput.class);
     private final ChatModel model;
     private final OllamaChatOptions options;
     private final JsonMapper json = JsonMapper.builder()
@@ -37,10 +40,13 @@ public class OllamaStructuredOutput {
     }
 
     public <T> T call(String systemPrompt, String context, Class<T> outputType) {
+        return call(systemPrompt, context, outputType, new BeanOutputConverter<>(outputType).getJsonSchema());
+    }
+
+    public <T> T call(String systemPrompt, String context, Class<T> outputType, String schema) {
         String output;
         try {
-            var converter = new BeanOutputConverter<>(outputType);
-            var structuredOptions = options.mutate().outputSchema(converter.getJsonSchema()).build();
+            var structuredOptions = options.mutate().outputSchema(schema).build();
             var response = model.call(new Prompt(List.of(new SystemMessage(systemPrompt), new UserMessage(context)), structuredOptions));
             if (response == null || response.getResult() == null || response.getResult().getOutput() == null) {
                 throw new AiOutputValidationException("AI returned an empty structured response.");
@@ -59,6 +65,7 @@ public class OllamaStructuredOutput {
             if (value == null) throw new AiOutputValidationException("AI returned an empty structured response.");
             return value;
         } catch (RuntimeException exception) {
+            log.warn("AI structuredOutputRejected exceptionType={}", exception.getClass().getSimpleName());
             throw new AiOutputValidationException("AI produced invalid structured output.");
         }
     }
