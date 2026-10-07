@@ -251,6 +251,24 @@ OS collation mismatch, rebuild affected indexes before refreshing its recorded v
 see [PostgreSQL's guidance](https://www.postgresql.org/docs/15/sql-altercollation.html).
 Fresh volumes need no such repair.
 
+## Ask Conductor
+
+Conductor Copilot is a local, read-only operations assistant. It uses `qwen2.5-coder:7b` through Ollama and returns an answer separately from inspectable evidence and code-owned run/task/analysis/incident references.
+
+```mermaid
+flowchart LR
+    Question --> Ollama[Ollama structured tool selection]
+    Ollama --> Registry[Allowlisted read tool]
+    Registry --> Evidence[Conductor evidence]
+    Evidence --> Answer[Ollama answer with citations]
+```
+
+`POST /api/v1/ai/copilot/query` accepts `question` and exactly one of `jobId`, `workflowId`, or `analysisId`. Example: `{"question":"How many retries happened?","jobId":"<run UUID>"}`. Other questions include “Why did this run fail?”, “Which tasks failed?”, and “Have we seen this before?”. Run scope offers `getRun`, `getTasks`, `getFailedTasks`, `getTaskAttempts`, `getFailureAnalysis`, and `getSimilarIncidents`; workflow scope offers `getWorkflow`. Stored analyses and indexed incidents are read only: the copilot never generates failure analysis or indexes an incident implicitly.
+
+There are no mutation tools, scheduler access, arbitrary SQL, Kafka publishing, shell execution, or worker calls. Task IDs must belong to the scoped run; historical matches carry explicit references to previous runs. Limits are four tool calls, five model steps, 50 tasks, 300 recorded attempts, five incident matches, 4 KB per tool result, 24 KB total context, and a configurable `AI_COPILOT_TIMEOUT` (default 180 seconds; maximum five minutes). Missing or oversized evidence is reported rather than fabricated. Recorded retry counts and task durations include completeness indicators; task-duration shares are fractions of recorded active attempt time, not workflow wall time.
+
+Run `python scripts/copilot-smoke.py --job-id <analyzed-and-indexed-failed-run>` for the optional live check. The VS Code collection in `scripts/conductor-demo.http` includes query examples. Cold CPU model loading may exceed the provider timeout; such requests return 503 safely.
+
 ## Architecture
 
 ```
