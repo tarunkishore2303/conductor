@@ -54,6 +54,9 @@ class CopilotServiceTest {
         when(tools.execute(eq("getRun"), any(), any())).thenReturn(evidence("getRun"));
         var response = service.query(query("How many retries occurred?"));
         assertThat(response.readOnly()).isTrue();
+        assertThat(response.answerSource()).isEqualTo("OLLAMA_INTERPRETATION");
+        assertThat(new JsonMapper().writeValueAsString(response))
+                .contains("\"answerSource\":\"OLLAMA_INTERPRETATION\"");
         assertThat(response.toolsUsed()).containsExactly("getRun");
         assertThat(response.evidence().getFirst().references().getFirst().id()).isEqualTo(run);
         verifyNoInteractions(analyses);
@@ -63,6 +66,9 @@ class CopilotServiceTest {
     void mutationRequestDoesNotInvokeModelOrAnyTool() {
         var response = service.query(query("Retry this task."));
         assertThat(response.answer()).contains("read-only", "cannot retry");
+        assertThat(response.answerSource()).isEqualTo("DETERMINISTIC_NOTICE");
+        assertThat(new JsonMapper().writeValueAsString(response))
+                .contains("\"answerSource\":\"DETERMINISTIC_NOTICE\"");
         assertThat(response.toolsUsed()).isEmpty();
         verifyNoInteractions(client, tools, analyses);
     }

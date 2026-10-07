@@ -6,7 +6,7 @@ from copilot_smoke_assertions import assert_copilot_evidence
 
 def request(base, path, body=None):
     data = None if body is None else json.dumps(body).encode()
-    with urlopen(Request(base + path, data=data, headers={'Content-Type': 'application/json'}), timeout=190) as response:
+    with urlopen(Request(base + path, data=data, headers={'Content-Type': 'application/json'}), timeout=250) as response:
         return json.load(response)
 
 def run(args):

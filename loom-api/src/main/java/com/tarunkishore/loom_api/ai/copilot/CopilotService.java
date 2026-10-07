@@ -165,5 +165,10 @@ public class CopilotService {
 
     public record Query(String question, UUID jobId, UUID workflowId, UUID analysisId) {}
     public record Response(String answer, List<CopilotClient.Evidence> evidence, List<String> toolsUsed,
-                           List<String> evidenceIds, String model, Instant generatedAt, boolean readOnly) {}
+                           List<String> evidenceIds, String model, Instant generatedAt, boolean readOnly) {
+        @com.fasterxml.jackson.annotation.JsonProperty("answerSource")
+        public String answerSource() {
+            return model == null ? "DETERMINISTIC_NOTICE" : "OLLAMA_INTERPRETATION";
+        }
+    }
 }
