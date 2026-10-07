@@ -1,7 +1,8 @@
 # VS Code REST Client (humao.rest-client): click "Send Request" above a request.
 # Send requests individually, in order within each section. Named responses capture IDs.
 # Workers must use DEMO_FAILURES_ENABLED=true for the three fixed failure tasks.
-# AI requests may take up to 130 seconds on a cold local Ollama model.
+# Copilot deadline is 180 seconds by default; CPU verification used 240 seconds.
+# Set rest-client.timeoutinmilliseconds to 300000 if the client times out sooner.
 # Quick-demo IDs reference this machine's existing database; use fresh flows after a reset.
 @baseUrl = http://localhost:8080
 @aiUrl = http://localhost:8085
