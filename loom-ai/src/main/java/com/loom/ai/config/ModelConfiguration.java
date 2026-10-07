@@ -1,6 +1,8 @@
 package com.loom.ai.config;
 
 import com.loom.ai.model.FailureInterpretationModel;
+import com.loom.ai.model.ExecutionSummaryModel;
+import com.loom.ai.provider.OllamaExecutionSummaryModel;
 import com.loom.ai.model.CopilotModel;
 import com.loom.ai.provider.OllamaCopilotModel;
 import com.loom.ai.model.IncidentEmbeddingModel;
@@ -30,6 +32,12 @@ import java.nio.charset.StandardCharsets;
 
 @Configuration
 public class ModelConfiguration {
+    @Bean
+    ExecutionSummaryModel executionSummaryModel(AiProperties properties) throws IOException {
+        if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };
+        return new OllamaExecutionSummaryModel(structuredOutput(properties), prompt("execution-summary.txt"));
+    }
+
     @Bean
     CopilotModel copilotModel(AiProperties properties) throws IOException {
         if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };
