@@ -17,6 +17,8 @@ class ModelConfigurationTest {
         assertThatThrownBy(() -> embeddings.embed("context")).isInstanceOf(AiProviderUnavailableException.class);
         var synthesis = new ModelConfiguration().incidentSynthesisModel(properties);
         assertThatThrownBy(() -> synthesis.synthesize(null)).isInstanceOf(AiProviderUnavailableException.class);
+        var copilot = new ModelConfiguration().copilotModel(properties);
+        assertThatThrownBy(() -> copilot.step(null)).isInstanceOf(AiProviderUnavailableException.class);
     }
     @Test
     void rejectsUnboundedConfiguration() {

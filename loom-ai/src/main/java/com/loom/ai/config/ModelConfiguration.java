@@ -1,6 +1,8 @@
 package com.loom.ai.config;
 
 import com.loom.ai.model.FailureInterpretationModel;
+import com.loom.ai.model.CopilotModel;
+import com.loom.ai.provider.OllamaCopilotModel;
 import com.loom.ai.model.IncidentEmbeddingModel;
 import com.loom.ai.model.IncidentSynthesisModel;
 import com.loom.ai.provider.OllamaIncidentEmbeddingModel;
@@ -28,6 +30,12 @@ import java.nio.charset.StandardCharsets;
 
 @Configuration
 public class ModelConfiguration {
+    @Bean
+    CopilotModel copilotModel(AiProperties properties) throws IOException {
+        if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };
+        return new OllamaCopilotModel(structuredOutput(properties), prompt("copilot-step.txt"));
+    }
+
     @Bean
     IncidentEmbeddingModel incidentEmbeddingModel(AiProperties properties, AiEmbeddingProperties embeddings) {
         if (!properties.enabled()) return text -> { throw new AiProviderUnavailableException(); };
