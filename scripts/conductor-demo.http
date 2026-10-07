@@ -7,6 +7,7 @@
 @aiUrl = http://localhost:8085
 @verifiedFailedRun = 3aa118dc-d9ea-48ce-b9ba-1b24e22882d4
 @verifiedAnalysis = b746b2a4-7346-4ade-b667-fff197a28f38
+@verifiedCompleteRun = c9115045-2bfa-4c96-9feb-b72943329a4d
 
 ### API health
 GET {{baseUrl}}/actuator/health
@@ -214,6 +215,24 @@ POST {{baseUrl}}/api/v1/ai/copilot/query
 Content-Type: application/json
 
 {"question":"Retry this task.","jobId":"{{verifiedFailedRun}}"}
+
+### Generate or reuse a summary of a successful run
+POST {{baseUrl}}/api/v1/ai/runs/{{verifiedCompleteRun}}/summary
+Content-Type: application/json
+
+{}
+
+### Read stored successful summary (no model call)
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedCompleteRun}}/summary
+
+### Generate or reuse a summary of the failed/DLQ run
+POST {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/summary
+Content-Type: application/json
+
+{}
+
+### Read stored failed summary; works with Ollama stopped
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/summary
 
 ### Local model operation metrics
 GET {{aiUrl}}/actuator/prometheus

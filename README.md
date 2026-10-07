@@ -105,8 +105,8 @@ Workers currently support only simulated `NOOP` tasks. Names describe intended
 business operations; they do not download orders or generate invoices. Parallelism
 is a fixed DAG, without schedules or dynamic fan-out. Human review remains
 necessary: a valid graph does not guarantee the requested business semantics.
-Authentication/tenant isolation and expired-proposal cleanup are deferred. RAG,
-failure analysis, copilot, optimization, and frontend AI are outside this phase.
+Authentication/tenant isolation and expired-proposal cleanup are deferred.
+Workflow optimization and frontend AI are not implemented.
 
 Verified on 2026-10-04: 54 unit tests and 18 Podman integration tests passed. The
 real `qwen2.5-coder:7b` model generated the six-task orders DAG with two invoice
@@ -253,7 +253,7 @@ Fresh volumes need no such repair.
 
 ## Ask Conductor
 
-Conductor Copilot is a local, read-only operations assistant. It uses `qwen2.5-coder:7b` through Ollama and returns an answer separately from inspectable evidence and code-owned run/task/analysis/incident references.
+Conductor Copilot is a local, read-only operations assistant. It uses `qwen2.5-coder:7b` through Ollama and returns an answer separately from inspectable evidence and code-owned run/task/analysis/incident references. `answerSource` explicitly distinguishes `OLLAMA_INTERPRETATION` from `DETERMINISTIC_NOTICE`. Model prose is interpretation: inspect code-derived facts and any prior analysis confidence in the evidence rather than treating a likely cause as proven.
 
 ```mermaid
 flowchart LR
@@ -268,6 +268,43 @@ flowchart LR
 There are no mutation tools, scheduler access, arbitrary SQL, Kafka publishing, shell execution, or worker calls. Task IDs must belong to the scoped run; historical matches carry explicit references to previous runs. Limits are four tool calls, five model steps, 50 tasks, 300 recorded attempts, five incident matches, 4 KB per tool result, 24 KB total context, and a configurable `AI_COPILOT_TIMEOUT` (default 180 seconds; maximum five minutes). Missing or oversized evidence is reported rather than fabricated. Recorded retry counts and task durations include completeness indicators; task-duration shares are fractions of recorded active attempt time, not workflow wall time.
 
 Run `python scripts/copilot-smoke.py --job-id <analyzed-and-indexed-failed-run>` for the optional live check. The VS Code collection in `scripts/conductor-demo.http` includes query examples. Cold CPU model loading may exceed the provider timeout; such requests return 503 safely.
+
+## Execution Summaries
+
+Terminal `COMPLETE` and settled `FAILED` runs can be summarized on explicit request. Java calculates task-state counts, recorded attempts/retries, observed attempt span, and the five largest contributors to aggregate recorded active task time. Ollama supplies a separate `interpretation` containing an overview, notable events, and observational notes; it never authors the numeric `facts`.
+
+```mermaid
+flowchart LR
+    Run[Terminal run] --> Facts[Deterministic sanitized facts]
+    Facts --> Ollama[Local Ollama interpretation]
+    Ollama --> Stored[Persisted summary snapshot]
+    Facts --> Stored
+```
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /api/v1/ai/runs/{jobId}/summary` | Generate if the same evidence has no stored summary; otherwise reuse it |
+| `GET /api/v1/ai/runs/{jobId}/summary` | Read the latest stored snapshot, without contacting Ollama |
+
+V7 adds `ai_run_summaries`, unique by run ID and versioned context hash. The hash includes the sanitized execution-evidence fingerprint and optional stored failure-analysis reference. Scheduler updates to `updatedAt` do not cause new model calls. Changed execution evidence can produce a new immutable snapshot. Concurrent requests coalesce within the API process, and the database uniqueness constraint prevents duplicate rows across processes. There is no automatic background generation or failure-analysis regeneration.
+
+`observedAttemptSpanMillis` spans recorded attempt start/end timestamps; it is not an exact engine run duration. Active-duration shares include valid recorded retry attempts and do not represent a critical path or wall-time percentage. Missing or legacy history is explicitly marked incomplete. Runs with active tasks or outstanding retries are rejected even if their job status has already become `FAILED`.
+
+```powershell
+python scripts/execution-summary-smoke.py --complete-job-id <complete-run> --failed-job-id <analyzed-failed-run> --expected-retries 2
+```
+
+The VS Code request collection includes POST/GET examples. Stored summaries, stored failure analyses, and already-indexed vector retrieval remain available when Ollama is stopped; new copilot answers and uncached summaries require the local model. Prometheus exposes `ai_copilot_*`, `ai_tool_*`, and `ai_summary_*` metrics without entity-ID tags, alongside existing HTTP request metrics in Grafana.
+
+For slower CPU-only machines, the measured cold model load can exceed the default provider deadline. These optional bounded overrides were used for local verification; no model is downloaded by this command:
+
+```powershell
+$env:AI_ENABLED='true'
+$env:AI_REQUEST_TIMEOUT='180s'
+$env:AI_SERVICE_TIMEOUT='190s'
+$env:AI_COPILOT_TIMEOUT='240s'
+.\scripts\compose.ps1 --profile ai up -d
+```
 
 ## Architecture
 
@@ -530,9 +567,9 @@ Key metrics:
 ./gradlew integrationTest
 ```
 
-Phase 4–5 verification on Java 25 / Podman passed `./gradlew build` (130 unit tests),
-`./gradlew :loom-api:integrationTest :loom-worker:integrationTest` (31 integration
-tests), and `python -m unittest discover -s scripts/tests -v` (12 smoke-helper tests).
+Phase 6–7 verification on Java 25 / Podman passed `./gradlew build` (220 unit tests),
+`./gradlew :loom-api:integrationTest :loom-worker:integrationTest` (35 API and four worker
+integration tests), and `python -m unittest discover -s scripts/tests -v` (20 smoke-helper tests).
 Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka,
 and Redis containers without live Ollama calls.
 
