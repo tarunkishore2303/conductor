@@ -4,6 +4,7 @@ plugins {
 }
 
 dependencies {
+    implementation project(':loom-observability')
     implementation project(':loom-common')
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
