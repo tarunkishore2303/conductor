@@ -1,12 +1,14 @@
 # VS Code REST Client (humao.rest-client): click "Send Request" above a request.
 # Send requests individually, in order within each section. Named responses capture IDs.
 # Workers must use DEMO_FAILURES_ENABLED=true for the three fixed failure tasks.
-# AI requests may take up to 130 seconds on a cold local Ollama model.
+# Copilot deadline is 180 seconds by default; CPU verification used 240 seconds.
+# Set rest-client.timeoutinmilliseconds to 300000 if the client times out sooner.
 # Quick-demo IDs reference this machine's existing database; use fresh flows after a reset.
 @baseUrl = http://localhost:8080
 @aiUrl = http://localhost:8085
 @verifiedFailedRun = 3aa118dc-d9ea-48ce-b9ba-1b24e22882d4
 @verifiedAnalysis = b746b2a4-7346-4ade-b667-fff197a28f38
+@verifiedCompleteRun = c9115045-2bfa-4c96-9feb-b72943329a4d
 
 ### API health
 GET {{baseUrl}}/actuator/health
@@ -190,6 +192,48 @@ GET {{baseUrl}}/api/v1/jobs/00000000-0000-0000-0000-000000000000
 
 ### API request/search metrics; Grafana: http://localhost:3000/d/conductor-requests
 GET {{baseUrl}}/actuator/prometheus
+
+### Copilot: read existing failure analysis (does not generate another analysis)
+POST {{baseUrl}}/api/v1/ai/copilot/query
+Content-Type: application/json
+
+{"question":"Why did this run fail?","jobId":"{{verifiedFailedRun}}"}
+
+### Copilot: real historical incident evidence
+POST {{baseUrl}}/api/v1/ai/copilot/query
+Content-Type: application/json
+
+{"question":"Have we seen this before?","jobId":"{{verifiedFailedRun}}"}
+
+### Copilot: deterministic recorded retry counts
+POST {{baseUrl}}/api/v1/ai/copilot/query
+Content-Type: application/json
+
+{"question":"How many retries happened?","jobId":"{{verifiedFailedRun}}"}
+
+### Copilot: mutation refusal, no execution changes
+POST {{baseUrl}}/api/v1/ai/copilot/query
+Content-Type: application/json
+
+{"question":"Retry this task.","jobId":"{{verifiedFailedRun}}"}
+
+### Generate or reuse a summary of a successful run
+POST {{baseUrl}}/api/v1/ai/runs/{{verifiedCompleteRun}}/summary
+Content-Type: application/json
+
+{}
+
+### Read stored successful summary (no model call)
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedCompleteRun}}/summary
+
+### Generate or reuse a summary of the failed/DLQ run
+POST {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/summary
+Content-Type: application/json
+
+{}
+
+### Read stored failed summary; works with Ollama stopped
+GET {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/summary
 
 ### Local model operation metrics
 GET {{aiUrl}}/actuator/prometheus
