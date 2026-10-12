@@ -1,11 +1,16 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.ai.validation.FailureInterpretationValidator;
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.tarunkishore.loom_api.repository.AiFailureAnalysisRepository;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.beans.factory.annotation.Value;
+import com.tarunkishore.loom_api.config.FailureContextProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,15 +40,13 @@ public class FailureAnalysisService {
             AiFailureAnalysisRepository repository,
             ObjectMapper mapper,
             ApplicationEventPublisher events,
-            @Value("${conductor.ai.failure-context-max-chars:32768}") int maxContextChars) {
-        if (maxContextChars < 1 || maxContextChars > 65536)
-            throw new IllegalArgumentException("Failure context budget must be between 1 and 65536 characters");
+            FailureContextProperties properties) {
         this.collector = collector;
         this.client = client;
         this.repository = repository;
         this.mapper = mapper;
         this.events = events;
-        this.maxContextChars = maxContextChars;
+        this.maxContextChars = properties.failureContextMaxChars();
     }
 
     // No transaction encloses the model request; only context reads and saves use short DB
@@ -80,7 +83,7 @@ public class FailureAnalysisService {
                 return analysis;
             }
             var result = client.analyze(facts);
-            validate(result);
+            FailureInterpretationValidator.validate(result);
             var row = new AiFailureAnalysis();
             row.setId(UUID.randomUUID());
             row.setJobId(jobId);
@@ -146,27 +149,6 @@ public class FailureAnalysisService {
         } catch (tools.jackson.core.JacksonException exception) {
             throw new AiOutputException("Stored failure analysis is invalid");
         }
-    }
-
-    private static void validate(FailureAnalysisClient.Result result) {
-        if (result == null || result.interpretation() == null)
-            throw new AiOutputException("Empty failure interpretation");
-        field(result.model(), 128);
-        var i = result.interpretation();
-        field(i.likelyCause(), 1000);
-        field(i.explanation(), 4000);
-        if (!Set.of("LOW", "MEDIUM", "HIGH").contains(i.confidence() == null ? "" : i.confidence()))
-            throw new AiOutputException("Invalid interpretation confidence");
-        if (i.recommendedActions() == null
-                || i.recommendedActions().isEmpty()
-                || i.recommendedActions().size() > 5)
-            throw new AiOutputException("Interpretation requires 1 to 5 recommendations");
-        i.recommendedActions().forEach(s -> field(s, 1000));
-    }
-
-    private static void field(String s, int max) {
-        if (s == null || s.isBlank() || s.length() > max)
-            throw new AiOutputException("Invalid structured failure interpretation");
     }
 
     private static String hash(String json) {

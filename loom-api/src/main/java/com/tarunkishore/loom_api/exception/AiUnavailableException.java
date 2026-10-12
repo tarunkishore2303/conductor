@@ -1,4 +1,4 @@
-package com.tarunkishore.loom_api.ai;
+package com.tarunkishore.loom_api.exception;
 
 public class AiUnavailableException extends RuntimeException {
     public AiUnavailableException() {

@@ -1,16 +1,17 @@
 package com.loom.ai.service;
 
+import com.loom.ai.exception.AiOutputValidationException;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiEmbeddingProperties;
 import com.loom.ai.model.IncidentEmbeddingModel;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.loom.observability.OperationMetrics;
 import org.springframework.stereotype.Service;
 
 @Service
 public class IncidentEmbeddingService {
-    private static final Logger log = LoggerFactory.getLogger(IncidentEmbeddingService.class);
     private final IncidentEmbeddingModel model;
     private final AiEmbeddingProperties properties;
     private final MeterRegistry metrics;
@@ -25,20 +26,16 @@ public class IncidentEmbeddingService {
         if (text == null || text.isBlank() || text.length() > 4000) {
             throw new AiInvalidRequestException("Embedding text must contain between 1 and 4000 characters.");
         }
-        var sample = Timer.start(metrics);
-        String outcome = "success";
-        metrics.counter("ai.requests", "operation", "embedding").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.EMBEDDING, properties.model());
         try {
             float[] result = model.embed(EvidenceRedactor.redact(text));
             validateVector(result);
             return result.clone();
         } catch (RuntimeException exception) {
-            outcome = "failure";
-            metrics.counter("ai.request.failures", "operation", "embedding").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw exception;
         } finally {
-            long elapsed = sample.stop(metrics.timer("ai.request.duration", "operation", "embedding", "outcome", outcome));
-            log.info("AI operation=embedding model={} outcome={} durationMs={}", properties.model(), outcome, elapsed / 1_000_000);
+            observation.close();
         }
     }
 

@@ -1,4 +1,4 @@
-package com.tarunkishore.loom_api.ai;
+package com.tarunkishore.loom_api.exception;
 
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;

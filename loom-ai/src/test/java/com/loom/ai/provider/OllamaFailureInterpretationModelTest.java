@@ -1,8 +1,8 @@
 package com.loom.ai.provider;
 
 import com.loom.ai.model.*;
-import com.loom.ai.service.AiOutputValidationException;
-import com.loom.ai.service.AiProviderUnavailableException;
+import com.loom.ai.exception.AiOutputValidationException;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;

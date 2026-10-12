@@ -17,7 +17,7 @@ public class AiWorkflowController {
     }
 
     @PostMapping("/generate")
-    public AiWorkflowProposalService.Preview generate(@RequestBody GenerationRequest request) {
+    public AiWorkflowProposalService.Preview generate(@jakarta.validation.Valid @RequestBody GenerationRequest request) {
         return service.generate(request.prompt());
     }
 
@@ -32,5 +32,6 @@ public class AiWorkflowController {
         return service.approve(id);
     }
 
-    public record GenerationRequest(String prompt) {}
+    public record GenerationRequest(@jakarta.validation.constraints.NotBlank
+                                    @jakarta.validation.constraints.Size(max = 4000) String prompt) {}
 }

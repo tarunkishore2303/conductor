@@ -1,7 +1,7 @@
 package com.loom.ai.provider;
 
 import com.loom.ai.model.IncidentSynthesisRequest;
-import com.loom.ai.service.AiOutputValidationException;
+import com.loom.ai.exception.AiOutputValidationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;

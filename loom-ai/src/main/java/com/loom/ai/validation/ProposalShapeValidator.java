@@ -1,4 +1,6 @@
-package com.loom.ai.service;
+package com.loom.ai.validation;
+
+import com.loom.ai.exception.AiOutputValidationException;
 
 import com.loom.ai.model.GeneratedWorkflowProposal;
 import org.springframework.stereotype.Component;

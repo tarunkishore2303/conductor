@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -30,8 +34,7 @@ class IncidentIndexServiceTest {
                     client,
                     new IncidentDocumentBuilder(),
                     JsonMapper.builder().build(),
-                    model,
-                    false);
+                    new com.tarunkishore.loom_api.config.IncidentProperties(model, "fake", 0.93, false));
 
     @BeforeEach
     void setup() {

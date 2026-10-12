@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.awaitility.Awaitility.await;
 

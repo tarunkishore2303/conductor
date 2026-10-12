@@ -1,5 +1,11 @@
 package com.loom.ai.service;
 
+import com.loom.ai.exception.AiProviderUnavailableException;
+
+import com.loom.ai.exception.AiOutputValidationException;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.model.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -19,7 +25,7 @@ class FailureInterpretationServiceTest {
     private final FailureInterpretationModel model = mock(FailureInterpretationModel.class);
     private final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
     private final FailureInterpretationService service = new FailureInterpretationService(model, new FailureContextSanitizer(),
-            factory.getValidator(), new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics, 32768);
+            factory.getValidator(), new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics, new com.loom.ai.config.FailureContextProperties(32768));
 
     @AfterEach
     void closeFactory() { factory.close(); }
@@ -76,7 +82,7 @@ class FailureInterpretationServiceTest {
 
     private FailureInterpretationService serviceWithBudget(int budget) {
         return new FailureInterpretationService(model, new FailureContextSanitizer(), factory.getValidator(),
-                new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics, budget);
+                new AiProperties(false, "http://localhost:11434", "test-model", 0, Duration.ofSeconds(1), 4096), metrics, new com.loom.ai.config.FailureContextProperties(budget));
     }
 
     @Test

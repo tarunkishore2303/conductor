@@ -1,6 +1,6 @@
 package com.tarunkishore.loom_api.ai.summary;
 
-import com.tarunkishore.loom_api.ai.AiOutputException;
+import com.tarunkishore.loom_api.exception.AiOutputException;
 import com.tarunkishore.loom_api.ai.FailureAnalysisService;
 import com.tarunkishore.loom_api.ai.copilot.CopilotReadService;
 import com.tarunkishore.loom_api.ai.copilot.CopilotReadService.Attempt;

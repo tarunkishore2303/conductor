@@ -1,6 +1,6 @@
 package com.loom.ai.config;
 
-import com.loom.ai.service.AiProviderUnavailableException;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;

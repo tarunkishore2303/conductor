@@ -1,7 +1,9 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
 import com.tarunkishore.loom_api.ai.copilot.CopilotClient;
-import org.springframework.beans.factory.annotation.Value;
+import com.tarunkishore.loom_api.config.AiServiceProperties;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -13,8 +15,9 @@ public class HttpCopilotClient implements CopilotClient {
     private final Duration timeout;
 
     public HttpCopilotClient(ObjectMapper mapper,
-            @Value("${conductor.ai.base-url:http://localhost:8085}") String baseUrl,
-            @Value("${conductor.ai.timeout:130s}") Duration timeout) {
+            AiServiceProperties properties) {
+        String baseUrl = properties.baseUrl();
+        Duration timeout = properties.timeout();
         this.mapper = mapper;
         this.baseUrl = baseUrl;
         this.timeout = timeout;

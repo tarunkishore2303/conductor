@@ -1,5 +1,9 @@
 package com.loom.ai.service;
 
+import com.loom.ai.exception.AiOutputValidationException;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiEmbeddingProperties;
 import com.loom.ai.model.IncidentEmbeddingModel;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;

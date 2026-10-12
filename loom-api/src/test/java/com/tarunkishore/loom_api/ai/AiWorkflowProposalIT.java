@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateResponse;
 import com.tarunkishore.loom_api.repository.AiWorkflowProposalRepository;
