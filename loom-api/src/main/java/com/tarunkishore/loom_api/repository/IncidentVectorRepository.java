@@ -1,6 +1,6 @@
 package com.tarunkishore.loom_api.repository;
 
-import com.tarunkishore.loom_api.ai.AiOutputException;
+import com.tarunkishore.loom_api.exception.AiOutputException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;

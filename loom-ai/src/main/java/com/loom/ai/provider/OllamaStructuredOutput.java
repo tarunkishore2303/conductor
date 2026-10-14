@@ -1,7 +1,7 @@
 package com.loom.ai.provider;
 
-import com.loom.ai.service.AiOutputValidationException;
-import com.loom.ai.service.AiProviderUnavailableException;
+import com.loom.ai.exception.AiOutputValidationException;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;

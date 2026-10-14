@@ -1,11 +1,14 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.ai.validation.IncidentSynthesisValidator;
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.tarunkishore.loom_api.repository.*;
 
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.observability.OperationMetrics;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.tarunkishore.loom_api.config.IncidentProperties;
 import org.springframework.stereotype.Service;
 
 import tools.jackson.databind.ObjectMapper;
@@ -40,35 +43,28 @@ public class SimilarIncidentService {
             IncidentAiClient client,
             IncidentDocumentBuilder documents,
             ObjectMapper mapper,
-            @Value("${conductor.ai.embedding-model:nomic-embed-text:v1.5}") String model,
-            @Value("${conductor.ai.incident-similarity-threshold:0.93}") double threshold,
-            @Value("${conductor.ai.chat-model:qwen2.5-coder:7b}") String chatModel,
+            IncidentProperties properties,
             MeterRegistry metrics) {
-        if (!Double.isFinite(threshold) || threshold < 0 || threshold > 1)
-            throw new IllegalArgumentException("Invalid similarity threshold");
         this.analyses = analyses;
         this.vectors = vectors;
         this.client = client;
         this.documents = documents;
         this.mapper = mapper;
-        this.model = model;
-        this.threshold = threshold;
-        this.chatModel = chatModel;
+        this.model = properties.embeddingModel();
+        this.threshold = properties.incidentSimilarityThreshold();
+        this.chatModel = properties.chatModel();
         this.metrics = metrics;
     }
 
     public Retrieval retrieve(UUID jobId, int topK) {
-        var sample = Timer.start(metrics);
-        String outcome = "success";
-        metrics.counter("ai.incident.search.requests").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.INCIDENT_SEARCH);
         try {
             return doRetrieve(jobId, topK);
         } catch (RuntimeException exception) {
-            outcome = "failure";
-            metrics.counter("ai.incident.search.failures").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw exception;
         } finally {
-            sample.stop(metrics.timer("ai.incident.search.duration", "outcome", outcome));
+            observation.close();
         }
     }
 
@@ -155,10 +151,10 @@ public class SimilarIncidentService {
         var response = synthesisCache.get(key);
         if (response == null) {
             response = client.synthesize(request);
-            validate(response, evidence);
+            IncidentSynthesisValidator.validate(response, evidence);
             synthesisCache.put(key, response);
         }
-        validate(response, evidence);
+        IncidentSynthesisValidator.validate(response, evidence);
         return new SynthesisResponse(retrieved, response.synthesis(), response.model());
     }
 
@@ -226,32 +222,6 @@ public class SimilarIncidentService {
                 match.similarity(),
                 "/api/v1/jobs/" + match.jobId(),
                 "/api/v1/ai/failure-analyses/" + match.analysisId());
-    }
-
-    private static void validate(
-            IncidentAiClient.SynthesisResult response,
-            List<IncidentAiClient.EvidenceMatch> evidence) {
-        if (response == null
-                || response.synthesis() == null
-                || response.model() == null
-                || response.model().isBlank()
-                || response.model().length() > 128)
-            throw new AiOutputException("Invalid incident synthesis");
-        var synthesis = response.synthesis();
-        if (synthesis.explanation() == null
-                || synthesis.explanation().isBlank()
-                || synthesis.explanation().length() > 2000
-                || synthesis.citedIncidentIds() == null
-                || synthesis.citedIncidentIds().isEmpty()
-                || synthesis.citedIncidentIds().size() > 5)
-            throw new AiOutputException("Incident synthesis must cite retrieved evidence");
-        var allowed = new HashSet<UUID>();
-        evidence.forEach(e -> allowed.add(e.incidentId()));
-        if (new HashSet<>(synthesis.citedIncidentIds()).size()
-                != synthesis.citedIncidentIds().size())
-            throw new AiOutputException("Incident synthesis contains duplicate citations");
-        if (!allowed.containsAll(synthesis.citedIncidentIds()))
-            throw new AiOutputException("Incident synthesis cites unretrieved evidence");
     }
 
     private FailureContext readFacts(AiFailureAnalysis analysis) {

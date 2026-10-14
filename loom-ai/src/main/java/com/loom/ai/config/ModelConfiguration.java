@@ -13,7 +13,7 @@ import com.loom.ai.model.WorkflowGenerationModel;
 import com.loom.ai.provider.OllamaFailureInterpretationModel;
 import com.loom.ai.provider.OllamaStructuredOutput;
 import com.loom.ai.provider.OllamaWorkflowGenerationModel;
-import com.loom.ai.service.AiProviderUnavailableException;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.OllamaEmbeddingModel;
 import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;

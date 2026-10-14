@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;

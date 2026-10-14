@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.loom.common.model.*;
 import com.loom.common.security.FailureEvidenceSanitizer;
 import com.tarunkishore.loom_api.repository.*;

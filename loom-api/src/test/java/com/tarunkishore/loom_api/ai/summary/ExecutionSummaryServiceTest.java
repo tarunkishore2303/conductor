@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai.summary;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 

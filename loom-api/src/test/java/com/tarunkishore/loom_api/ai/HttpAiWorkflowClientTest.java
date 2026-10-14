@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +38,7 @@ class HttpAiWorkflowClientTest {
         });
         server.start();
         return new HttpAiWorkflowClient(JsonMapper.builder().build(),
-                "http://127.0.0.1:" + server.getAddress().getPort(), timeout);
+                new com.tarunkishore.loom_api.config.AiServiceProperties("http://127.0.0.1:" + server.getAddress().getPort(), timeout));
     }
 
     @Test
@@ -54,7 +58,7 @@ class HttpAiWorkflowClientTest {
         });
         server.start();
         var client = new HttpAiWorkflowClient(JsonMapper.builder().build(),
-                "http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofMillis(50));
+                new com.tarunkishore.loom_api.config.AiServiceProperties("http://127.0.0.1:" + server.getAddress().getPort(), Duration.ofMillis(50)));
         assertThatThrownBy(() -> client.generate("orders")).isInstanceOf(AiUnavailableException.class);
     }
 
@@ -108,6 +112,6 @@ class HttpAiWorkflowClientTest {
     @Test
     void timeoutMustBePositive() {
         assertThatThrownBy(() -> new HttpAiWorkflowClient(JsonMapper.builder().build(),
-                "http://localhost:8085", Duration.ZERO)).isInstanceOf(IllegalArgumentException.class);
+                new com.tarunkishore.loom_api.config.AiServiceProperties("http://localhost:8085", Duration.ZERO))).isInstanceOf(IllegalArgumentException.class);
     }
 }

@@ -1,7 +1,7 @@
 package com.tarunkishore.loom_api.ai.copilot;
 
-import com.tarunkishore.loom_api.ai.AiOutputException;
-import com.tarunkishore.loom_api.ai.AiUnavailableException;
+import com.tarunkishore.loom_api.exception.AiOutputException;
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 

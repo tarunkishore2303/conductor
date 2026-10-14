@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api.ai.summary;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
 import static org.assertj.core.api.Assertions.*;
 
 import com.tarunkishore.loom_api.repository.AiRunSummaryRepository;
@@ -53,7 +55,7 @@ class ExecutionSummaryIT {
 
         public Result summarize(ExecutionSummaryFacts facts) {
             calls.incrementAndGet();
-            if (unavailable) throw new com.tarunkishore.loom_api.ai.AiUnavailableException();
+            if (unavailable) throw new com.tarunkishore.loom_api.exception.AiUnavailableException();
             if (malformed) return new Result(null, "fake");
             return new Result(
                     new Interpretation(

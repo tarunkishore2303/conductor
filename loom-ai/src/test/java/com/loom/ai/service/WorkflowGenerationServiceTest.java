@@ -1,5 +1,11 @@
 package com.loom.ai.service;
 
+import com.loom.ai.validation.ProposalShapeValidator;
+
+import com.loom.ai.exception.AiProviderUnavailableException;
+
+import com.loom.ai.exception.AiOutputValidationException;
+
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.model.GeneratedTaskProposal;
 import com.loom.ai.model.GeneratedWorkflowProposal;

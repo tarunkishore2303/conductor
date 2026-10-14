@@ -1,5 +1,11 @@
 package com.loom.ai.service;
 
+import com.loom.ai.exception.AiProviderUnavailableException;
+
+import com.loom.ai.exception.AiOutputValidationException;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.model.CopilotModel;
 import com.loom.ai.model.CopilotRequest;

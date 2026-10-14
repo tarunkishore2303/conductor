@@ -1,6 +1,6 @@
 package com.tarunkishore.loom_api.ai;
 
-import org.springframework.beans.factory.annotation.Value;
+import com.tarunkishore.loom_api.config.AiServiceProperties;
 import org.springframework.stereotype.Component;
 
 import tools.jackson.databind.ObjectMapper;
@@ -15,8 +15,9 @@ public class HttpIncidentAiClient implements IncidentAiClient {
 
     public HttpIncidentAiClient(
             ObjectMapper mapper,
-            @Value("${conductor.ai.base-url:http://localhost:8085}") String url,
-            @Value("${conductor.ai.timeout:130s}") Duration timeout) {
+            AiServiceProperties properties) {
+        String url = properties.baseUrl();
+        Duration timeout = properties.timeout();
         embeddings = new BoundedAiJsonClient(mapper, url, "/internal/v1/incidents/embed", timeout);
         synthesis =
                 new BoundedAiJsonClient(mapper, url, "/internal/v1/incidents/synthesize", timeout);

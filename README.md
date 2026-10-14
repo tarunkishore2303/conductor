@@ -306,6 +306,31 @@ $env:AI_COPILOT_TIMEOUT='240s'
 .\scripts\compose.ps1 --profile ai up -d
 ```
 
+## Platform conventions
+
+Exceptions belong to the module that owns the failure: `loom-api.exception` maps public errors to Spring `ProblemDetail`, while `com.loom.ai.exception` preserves the internal AI service's `{code, message}` contract. Invalid input is 400, missing data 404, conflicting state 409, invalid model output 422, and unavailable AI 503. Malformed requests do not echo payloads or parser diagnostics.
+
+Validation has three boundaries:
+
+- Jakarta Bean Validation checks request shape and bounds. Copilot's `@ExactlyOneScope` requires one run, workflow or analysis scope.
+- Explicit domain services enforce DAG rules, task ownership and terminal/settled execution state.
+- Dedicated output validators check untrusted model interpretations, including evidence citations, identifier grounding and size limits. They cannot replace domain validation.
+
+```mermaid
+flowchart LR
+    Request --> Schema[Request constraints]
+    Schema --> Domain[Deterministic domain checks]
+    Domain --> Model[Local Ollama]
+    Model --> Output[Untrusted output validator]
+    Output --> Response[Evidence and interpretation]
+```
+
+`loom-observability` provides an explicit `OperationMetrics` scope shared by API and AI services. It records requests, failures, duration and structured correlation logs; services still own exception propagation and business logic. Operations and outcomes are enums, so arbitrary prompts, IDs and URLs cannot become metric tags. Model identity is bounded log metadata only. Existing Prometheus metric families and the **Conductor Requests** Grafana dashboard remain compatible. This wrapper uses direct Micrometer instrumentation rather than AOP, so it works on ordinary calls without proxy restrictions. The module has no persistence dependencies, keeping JPA out of `loom-ai`.
+
+Typed configuration records group AI transport, failure-context limits, copilot deadlines and incident settings. Configuration is constructor-injected and validated during binding; existing environment variables and defaults are preserved. Provider timeout (120 seconds), API transport timeout (130 seconds) and copilot deadline (180 seconds) are distinct budgets. `AI_FAILURE_CONTEXT_MAX_CHARS` supplies the same default 32,768-character limit to API and AI. Invalid deadlines, context limits or similarity thresholds prevent startup rather than failing on a later request.
+
+The platform refactor adds no task capabilities or database migrations. Workers still support the existing simulated NOOP behavior; real handlers are a separate follow-up.
+
 ## Architecture
 
 ```

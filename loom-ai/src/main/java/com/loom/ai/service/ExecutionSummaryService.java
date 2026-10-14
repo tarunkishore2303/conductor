@@ -1,14 +1,16 @@
 package com.loom.ai.service;
 
+import com.loom.ai.validation.ExecutionSummaryInterpretationValidator;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.model.ExecutionSummaryInterpretation;
 import com.loom.ai.model.ExecutionSummaryModel;
 import com.loom.ai.model.ExecutionSummaryRequest;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.observability.OperationMetrics;
 import jakarta.validation.Validator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
@@ -21,8 +23,8 @@ import java.util.regex.Pattern;
 
 @Service
 public class ExecutionSummaryService {
-    private static final Logger log = LoggerFactory.getLogger(ExecutionSummaryService.class);
     private static final Pattern UUID_TEXT = Pattern.compile("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+    private final ExecutionSummaryInterpretationValidator outputValidator = new ExecutionSummaryInterpretationValidator();
     private final ExecutionSummaryModel model;
     private final Validator validator;
     private final AiProperties properties;
@@ -45,20 +47,16 @@ public class ExecutionSummaryService {
         String sanitizedFacts = json.writeValueAsString(sanitize(facts));
         if (sanitizedFacts.length() > 24000) throw new AiInvalidRequestException("Summary facts exceed the 24000 character limit.");
         var sanitized = new ExecutionSummaryRequest(sanitizedFacts, request.jobId(), request.taskIds(), request.failureAnalysisId());
-        var sample = Timer.start(metrics);
-        String outcome = "success";
-        metrics.counter("ai.requests", "operation", "execution_summary").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.EXECUTION_SUMMARY, properties.model());
         try {
             var result = model.summarize(sanitized);
-            validateOutput(result, request);
+            outputValidator.validate(result, request);
             return result;
         } catch (RuntimeException exception) {
-            outcome = "failure";
-            metrics.counter("ai.request.failures", "operation", "execution_summary").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw exception;
         } finally {
-            long elapsed = sample.stop(metrics.timer("ai.request.duration", "operation", "execution_summary", "outcome", outcome));
-            log.info("AI operation=execution_summary model={} outcome={} durationMs={}", properties.model(), outcome, elapsed / 1_000_000);
+            observation.close();
         }
     }
 
@@ -114,33 +112,6 @@ public class ExecutionSummaryService {
         return node;
     }
 
-    private void validateOutput(ExecutionSummaryInterpretation result, ExecutionSummaryRequest request) {
-        if (result == null || !validText(result.overview(), 2000) || !validList(result.notableEvents()) || !validList(result.operationalNotes())) {
-            throw new AiOutputValidationException("AI returned an invalid execution summary interpretation.");
-        }
-        var references = new HashSet<>(request.taskIds());
-        references.add(request.jobId());
-        if (request.failureAnalysisId() != null) references.add(request.failureAnalysisId());
-        var normalized = references.stream().map(String::toLowerCase).collect(java.util.stream.Collectors.toSet());
-        validateIdentifiers(result.overview(), normalized);
-        result.notableEvents().forEach(text -> validateIdentifiers(text, normalized));
-        result.operationalNotes().forEach(text -> validateIdentifiers(text, normalized));
-    }
-
-    private void validateIdentifiers(String text, Set<String> references) {
-        var identifiers = UUID_TEXT.matcher(text);
-        while (identifiers.find()) {
-            if (!references.contains(identifiers.group().toLowerCase())) {
-                throw new AiOutputValidationException("AI summary includes an unsupported execution identifier.");
-            }
-        }
-    }
-
     private String string(JsonNode node) { return node != null && node.isString() ? node.stringValue() : null; }
 
-    private boolean validList(List<String> list) {
-        return list != null && list.size() <= 5 && list.stream().allMatch(text -> validText(text, 1000));
-    }
-
-    private boolean validText(String value, int max) { return value != null && !value.isBlank() && value.length() <= max; }
 }

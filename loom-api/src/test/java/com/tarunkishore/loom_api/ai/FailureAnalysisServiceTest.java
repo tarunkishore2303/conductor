@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -40,7 +44,7 @@ class FailureAnalysisServiceTest {
     }
 
     private FailureAnalysisService serviceWithBudget(int budget) {
-        return new FailureAnalysisService(collector, client, repo, JsonMapper.builder().build(), event -> {}, budget);
+        return new FailureAnalysisService(collector, client, repo, JsonMapper.builder().build(), event -> {}, new com.tarunkishore.loom_api.config.FailureContextProperties(budget));
     }
 
     void stubAnalysis() {

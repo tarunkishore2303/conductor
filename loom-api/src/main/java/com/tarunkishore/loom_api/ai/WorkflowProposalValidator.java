@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.FailurePolicy;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;

@@ -1,6 +1,6 @@
 package com.loom.ai.config;
 
-import com.loom.ai.service.AiProviderUnavailableException;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import static org.assertj.core.api.Assertions.*;

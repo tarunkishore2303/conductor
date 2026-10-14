@@ -1,11 +1,12 @@
 package com.tarunkishore.loom_api.ai.summary;
 
-import com.tarunkishore.loom_api.ai.AiOutputException;
-import com.tarunkishore.loom_api.ai.AiUnavailableException;
+import com.tarunkishore.loom_api.ai.validation.ExecutionSummaryInterpretationValidator;
+import com.tarunkishore.loom_api.exception.AiOutputException;
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
 import com.tarunkishore.loom_api.repository.AiRunSummaryRepository;
 
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.observability.OperationMetrics;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,7 @@ import java.util.regex.Pattern;
 @Service
 public class ExecutionSummaryService {
     private static final Logger log = LoggerFactory.getLogger(ExecutionSummaryService.class);
-    private static final Pattern UUID_TEXT =
-            Pattern.compile(
-                    "(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b");
+
     private final ExecutionSummaryContextService contexts;
     private final ExecutionSummaryClient client;
     private final AiRunSummaryRepository repository;
@@ -50,10 +49,7 @@ public class ExecutionSummaryService {
 
     // Model latency never holds a database transaction or execution-engine lock.
     public Summary generate(UUID jobId) {
-        var timer = Timer.start(metrics);
-        var correlation = UUID.randomUUID();
-        String outcome = "success";
-        metrics.counter("ai.summary.requests").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.SUMMARY);
         try {
             var facts = contexts.collect(jobId);
             if (facts == null || !jobId.equals(facts.jobId()))
@@ -64,14 +60,14 @@ public class ExecutionSummaryService {
             String hash = hash(json);
             var cached = repository.findByJobIdAndContextHash(jobId, hash);
             if (cached.isPresent()) {
-                outcome = "cached";
+                observation.outcome(OperationMetrics.Outcome.CACHED);
                 return read(cached.get());
             }
             String key = jobId + ":" + hash;
             var promise = new CompletableFuture<Summary>();
             var existing = inFlight.putIfAbsent(key, promise);
             if (existing != null) {
-                outcome = "coalesced";
+                observation.outcome(OperationMetrics.Outcome.COALESCED);
                 return await(existing);
             }
             try {
@@ -79,11 +75,11 @@ public class ExecutionSummaryService {
                 if (lateCache.isPresent()) {
                     var summary = read(lateCache.get());
                     promise.complete(summary);
-                    outcome = "cached";
+                    observation.outcome(OperationMetrics.Outcome.CACHED);
                     return summary;
                 }
                 var result = client.summarize(facts);
-                validate(result, facts);
+                ExecutionSummaryInterpretationValidator.validate(result, facts);
                 var row = new AiRunSummary();
                 row.setId(UUID.randomUUID());
                 row.setJobId(jobId);
@@ -113,16 +109,10 @@ public class ExecutionSummaryService {
                 inFlight.remove(key, promise);
             }
         } catch (RuntimeException failure) {
-            outcome = "failure";
-            metrics.counter("ai.summary.failures").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw failure;
         } finally {
-            long nanos = timer.stop(metrics.timer("ai.summary.duration", "outcome", outcome));
-            log.info(
-                    "AI operation=execution_summary correlationId={} outcome={} durationMs={}",
-                    correlation,
-                    outcome,
-                    nanos / 1_000_000);
+            observation.close();
         }
     }
 
@@ -145,7 +135,7 @@ public class ExecutionSummaryService {
                     mapper.readValue(
                             row.getInterpretationJson(),
                             ExecutionSummaryClient.Interpretation.class);
-            validate(new ExecutionSummaryClient.Result(interpretation, row.getModel()), facts);
+            ExecutionSummaryInterpretationValidator.validate(new ExecutionSummaryClient.Result(interpretation, row.getModel()), facts);
             return new Summary(
                     row.getId(),
                     row.getJobId(),
@@ -172,51 +162,6 @@ public class ExecutionSummaryService {
             if (failure.getCause() instanceof RuntimeException runtime) throw runtime;
             throw new AiUnavailableException();
         }
-    }
-
-    private static void validate(
-            ExecutionSummaryClient.Result result, ExecutionSummaryFacts facts) {
-        if (result == null || result.interpretation() == null)
-            throw new AiOutputException("Empty execution summary interpretation");
-        field(result.model(), 128);
-        field(result.interpretation().overview(), 2000);
-        var allowed = new HashSet<UUID>();
-        allowed.add(facts.jobId());
-        if (facts.failureAnalysisId() != null) allowed.add(facts.failureAnalysisId());
-        if (facts.slowestObservedTasks() == null)
-            throw new AiOutputException("Invalid summary task evidence");
-        facts.slowestObservedTasks().forEach(task -> allowed.add(task.taskId()));
-        references(result.interpretation().overview(), allowed);
-        for (var list :
-                List.of(
-                        result.interpretation().notableEvents() == null
-                                ? List.<String>of()
-                                : result.interpretation().notableEvents(),
-                        result.interpretation().operationalNotes() == null
-                                ? List.<String>of()
-                                : result.interpretation().operationalNotes())) {
-            if (list.size() > 5)
-                throw new AiOutputException("Execution summary lists exceed the allowed size");
-            for (var text : list) {
-                field(text, 1000);
-                references(text, allowed);
-            }
-        }
-        if (result.interpretation().notableEvents() == null
-                || result.interpretation().operationalNotes() == null)
-            throw new AiOutputException("Execution summary lists must be present");
-    }
-
-    private static void field(String value, int max) {
-        if (value == null || value.isBlank() || value.length() > max)
-            throw new AiOutputException("Invalid structured execution summary");
-    }
-
-    private static void references(String text, Set<UUID> allowed) {
-        var matcher = UUID_TEXT.matcher(text);
-        while (matcher.find())
-            if (!allowed.contains(UUID.fromString(matcher.group())))
-                throw new AiOutputException("Execution summary references unsupported evidence");
     }
 
     private static String hash(String json) {

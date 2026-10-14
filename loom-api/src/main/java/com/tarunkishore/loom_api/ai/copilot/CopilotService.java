@@ -1,14 +1,15 @@
 package com.tarunkishore.loom_api.ai.copilot;
 
+import com.tarunkishore.loom_api.ai.validation.CopilotAnswerValidator;
 import com.loom.common.security.FailureEvidenceSanitizer;
-import com.tarunkishore.loom_api.ai.AiOutputException;
-import com.tarunkishore.loom_api.ai.AiUnavailableException;
+import com.tarunkishore.loom_api.exception.AiOutputException;
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
 import com.tarunkishore.loom_api.ai.FailureAnalysisService;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.observability.OperationMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.tarunkishore.loom_api.config.CopilotProperties;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
@@ -21,8 +22,7 @@ import java.util.regex.Pattern;
 public class CopilotService {
     private static final Logger log = LoggerFactory.getLogger(CopilotService.class);
     private static final int MAX_TOOLS = 4;
-    private static final Pattern UUID_PATTERN = Pattern.compile(
-            "(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+
     private static final Pattern MUTATION = Pattern.compile(
             "(?i)^\\s*(?:please\\s+)?(?:(?:can|could|would)\\s+you\\s+)?(?:please\\s+)?"
                     + "(?:retry|replay|cancel|delete|start|stop|schedule|execute|modify|update|mutate)\\b");
@@ -35,16 +35,13 @@ public class CopilotService {
 
     public CopilotService(CopilotClient client, CopilotToolRegistry tools, FailureAnalysisService analyses,
             ObjectMapper mapper, MeterRegistry metrics,
-            @Value("${conductor.ai.copilot-timeout:180s}") Duration timeout) {
-        if (timeout == null || timeout.isNegative() || timeout.isZero()
-                || timeout.compareTo(Duration.ofMinutes(5)) > 0)
-            throw new IllegalArgumentException("Copilot timeout must be positive and at most five minutes");
+            CopilotProperties properties) {
         this.client = client;
         this.tools = tools;
         this.analyses = analyses;
         this.mapper = mapper;
         this.metrics = metrics;
-        this.timeout = timeout;
+        this.timeout = properties.copilotTimeout();
     }
 
     public Response query(Query request) {
@@ -54,10 +51,7 @@ public class CopilotService {
         int scopes = (request.jobId() == null ? 0 : 1) + (request.workflowId() == null ? 0 : 1)
                 + (request.analysisId() == null ? 0 : 1);
         if (scopes != 1) throw new IllegalArgumentException("Supply exactly one jobId, workflowId or analysisId");
-        var sample = Timer.start(metrics);
-        String outcome = "success";
-        String correlation = UUID.randomUUID().toString();
-        metrics.counter("ai.copilot.requests").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.COPILOT);
         try {
             if (MUTATION.matcher(request.question()).find())
                 return new Response("Conductor Copilot is read-only and cannot retry tasks, change runs, or control execution.",
@@ -82,12 +76,10 @@ public class CopilotService {
                 executor.shutdownNow();
             }
         } catch (RuntimeException exception) {
-            outcome = "failure";
-            metrics.counter("ai.copilot.failures").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw exception;
         } finally {
-            long duration = sample.stop(metrics.timer("ai.copilot.duration", "outcome", outcome));
-            log.info("AI operation=copilot correlationId={} outcome={} durationMs={}", correlation, outcome, duration / 1_000_000);
+            observation.close();
         }
     }
 
@@ -119,7 +111,7 @@ public class CopilotService {
                                     + "Inspect the structured tool errors or select a scope with available evidence.",
                             List.copyOf(evidence), List.copyOf(used), List.of(), null, Instant.now(), true);
                 }
-                validateAnswer(step, evidence);
+                CopilotAnswerValidator.validate(step, evidence);
                 return new Response(step.answer(), List.copyOf(evidence), List.copyOf(used),
                         List.copyOf(step.evidenceIds()), result.model(), Instant.now(), true);
             }
@@ -142,28 +134,9 @@ public class CopilotService {
         throw new AiOutputException("Copilot did not produce an answer");
     }
 
-    private static void validateAnswer(CopilotClient.Step step, List<CopilotClient.Evidence> evidence) {
-        if (step.answer() == null || step.answer().isBlank() || step.answer().length() > 3000
-                || step.evidenceIds() == null || step.evidenceIds().size() > MAX_TOOLS
-                || new HashSet<>(step.evidenceIds()).size() != step.evidenceIds().size())
-            throw new AiOutputException("Invalid copilot answer or citations");
-        var allowed = new HashSet<String>();
-        var knownEvidence = new HashSet<String>();
-        for (var item : evidence) {
-            knownEvidence.add(item.evidenceId());
-            if (item.success() && step.evidenceIds().contains(item.evidenceId()))
-                item.references().forEach(ref -> allowed.add(ref.id().toString().toLowerCase(Locale.ROOT)));
-        }
-        if (!knownEvidence.containsAll(step.evidenceIds())
-                || (evidence.stream().anyMatch(CopilotClient.Evidence::success)
-                && evidence.stream().noneMatch(item -> item.success() && step.evidenceIds().contains(item.evidenceId()))))
-            throw new AiOutputException("Copilot must cite retrieved evidence");
-        var ids = UUID_PATTERN.matcher(step.answer());
-        while (ids.find()) if (!allowed.contains(ids.group().toLowerCase(Locale.ROOT)))
-            throw new AiOutputException("Copilot answer contains an ungrounded identifier");
-    }
-
-    public record Query(String question, UUID jobId, UUID workflowId, UUID analysisId) {}
+    @com.tarunkishore.loom_api.validation.ExactlyOneScope
+    public record Query(@jakarta.validation.constraints.NotBlank @jakarta.validation.constraints.Size(max = 2000)
+                        String question, UUID jobId, UUID workflowId, UUID analysisId) {}
     public record Response(String answer, List<CopilotClient.Evidence> evidence, List<String> toolsUsed,
                            List<String> evidenceIds, String model, Instant generatedAt, boolean readOnly) {
         @com.fasterxml.jackson.annotation.JsonProperty("answerSource")

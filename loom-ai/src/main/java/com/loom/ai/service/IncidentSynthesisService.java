@@ -1,12 +1,14 @@
 package com.loom.ai.service;
 
+import com.loom.ai.validation.IncidentSynthesisValidator;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.model.*;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.observability.OperationMetrics;
 import jakarta.validation.Validator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.json.JsonMapper;
 import java.util.HashSet;
@@ -14,7 +16,7 @@ import java.util.List;
 
 @Service
 public class IncidentSynthesisService {
-    private static final Logger log = LoggerFactory.getLogger(IncidentSynthesisService.class);
+    private final IncidentSynthesisValidator outputValidator = new IncidentSynthesisValidator();
     private final IncidentSynthesisModel model;
     private final Validator validator;
     private final AiProperties properties;
@@ -46,25 +48,16 @@ public class IncidentSynthesisService {
         if (new JsonMapper().writeValueAsString(sanitized).length() > 32768) {
             throw new AiInvalidRequestException("Incident evidence exceeds the 32768 character limit.");
         }
-        var sample = Timer.start(metrics);
-        String outcome = "success";
-        metrics.counter("ai.requests", "operation", "incident_synthesis").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.INCIDENT_SYNTHESIS, properties.model());
         try {
             var result = model.synthesize(sanitized);
-            if (result == null || result.explanation() == null || result.explanation().isBlank() || result.explanation().length() > 2000
-                    || result.citedIncidentIds() == null || result.citedIncidentIds().isEmpty() || result.citedIncidentIds().size() > 5
-                    || result.citedIncidentIds().stream().anyMatch(id -> id == null || !ids.contains(id))
-                    || new HashSet<>(result.citedIncidentIds()).size() != result.citedIncidentIds().size()) {
-                throw new AiOutputValidationException("AI synthesis contains invalid or unsupported citations.");
-            }
+            outputValidator.validate(result, ids);
             return result;
         } catch (RuntimeException exception) {
-            outcome = "failure";
-            metrics.counter("ai.request.failures", "operation", "incident_synthesis").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw exception;
         } finally {
-            long elapsed = sample.stop(metrics.timer("ai.request.duration", "operation", "incident_synthesis", "outcome", outcome));
-            log.info("AI operation=incident_synthesis model={} outcome={} durationMs={}", properties.model(), outcome, elapsed / 1_000_000);
+            observation.close();
         }
     }
 }

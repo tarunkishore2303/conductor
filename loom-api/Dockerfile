@@ -9,8 +9,10 @@ COPY loom-scheduler/build.gradle loom-scheduler/build.gradle
 COPY loom-worker/build.gradle loom-worker/build.gradle
 COPY loom-monitor/build.gradle loom-monitor/build.gradle
 COPY loom-ai/build.gradle loom-ai/build.gradle
+COPY loom-observability/build.gradle loom-observability/build.gradle
 COPY loom-common/src loom-common/src
 COPY loom-api/src loom-api/src
+COPY loom-observability/src loom-observability/src
 RUN ./gradlew :loom-api:bootJar -x test --no-daemon
 
 FROM docker.io/library/eclipse-temurin:25-jre-alpine

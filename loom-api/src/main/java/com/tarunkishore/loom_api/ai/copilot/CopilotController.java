@@ -8,7 +8,7 @@ public class CopilotController {
     private final CopilotService service;
     public CopilotController(CopilotService service) { this.service = service; }
     @PostMapping("/query")
-    public CopilotService.Response query(@RequestBody CopilotService.Query request) {
+    public CopilotService.Response query(@jakarta.validation.Valid @RequestBody CopilotService.Query request) {
         return service.query(request);
     }
 }

@@ -1,22 +1,24 @@
 package com.loom.ai.service;
 
+import com.loom.ai.validation.FailureInterpretationValidator;
+
+import com.loom.ai.exception.AiInvalidRequestException;
+
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.model.FailureFactsRequest;
 import com.loom.ai.model.FailureInterpretation;
 import com.loom.ai.model.FailureInterpretationModel;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.observability.OperationMetrics;
 import jakarta.validation.Validator;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.beans.factory.annotation.Value;
+import com.loom.ai.config.FailureContextProperties;
 import tools.jackson.databind.json.JsonMapper;
 import java.util.UUID;
 
 @Service
 public class FailureInterpretationService {
-    private static final Logger log = LoggerFactory.getLogger(FailureInterpretationService.class);
+    private final FailureInterpretationValidator outputValidator = new FailureInterpretationValidator();
     private final FailureInterpretationModel model;
     private final FailureContextSanitizer sanitizer;
     private final Validator validator;
@@ -26,15 +28,13 @@ public class FailureInterpretationService {
 
     public FailureInterpretationService(FailureInterpretationModel model, FailureContextSanitizer sanitizer,
                                         Validator validator, AiProperties properties, MeterRegistry metrics,
-                                        @Value("${conductor.ai.failure-context-max-chars:32768}") int maxContextChars) {
-        if (maxContextChars < 1 || maxContextChars > 65536)
-            throw new IllegalArgumentException("Failure context budget must be between 1 and 65536 characters");
+                                        FailureContextProperties contextProperties) {
         this.model = model;
         this.sanitizer = sanitizer;
         this.validator = validator;
         this.properties = properties;
         this.metrics = metrics;
-        this.maxContextChars = maxContextChars;
+        this.maxContextChars = contextProperties.failureContextMaxChars();
     }
 
     public FailureInterpretation analyze(FailureFactsRequest facts) {
@@ -46,35 +46,17 @@ public class FailureInterpretationService {
                 || new JsonMapper().writeValueAsString(sanitized).length() > maxContextChars) {
             throw new AiInvalidRequestException("Execution context exceeds the " + maxContextChars + " character or 300 attempt limit.");
         }
-        var sample = Timer.start(metrics);
-        String correlation = UUID.randomUUID().toString();
-        String outcome = "success";
-        metrics.counter("ai.requests", "operation", "failure_interpretation").increment();
+        var observation = OperationMetrics.start(metrics, OperationMetrics.Operation.FAILURE_INTERPRETATION, properties.model());
         try {
             var result = model.analyze(sanitized);
-            validateOutput(result);
+            outputValidator.validate(result);
             return result;
         } catch (RuntimeException exception) {
-            outcome = "failure";
-            metrics.counter("ai.request.failures", "operation", "failure_interpretation").increment();
+            observation.outcome(OperationMetrics.Outcome.FAILURE);
             throw exception;
         } finally {
-            long duration = sample.stop(metrics.timer("ai.request.duration", "operation", "failure_interpretation", "outcome", outcome));
-            log.info("AI operation=failure_interpretation correlationId={} model={} outcome={} durationMs={}",
-                    correlation, properties.model(), outcome, duration / 1_000_000);
+            observation.close();
         }
     }
 
-    private void validateOutput(FailureInterpretation result) {
-        if (result == null || result.confidence() == null || !validText(result.likelyCause(), 1000)
-                || !validText(result.explanation(), 4000) || result.recommendedActions() == null
-                || result.recommendedActions().isEmpty() || result.recommendedActions().size() > 5
-                || result.recommendedActions().stream().anyMatch(action -> !validText(action, 1000))) {
-            throw new AiOutputValidationException("AI produced an invalid failure interpretation.");
-        }
-    }
-
-    private boolean validText(String value, int max) {
-        return value != null && !value.isBlank() && value.length() <= max;
-    }
 }

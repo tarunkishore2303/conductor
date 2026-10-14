@@ -1,7 +1,7 @@
 package com.loom.ai.config;
 
 import com.loom.ai.model.WorkflowGenerationModel;
-import com.loom.ai.service.AiProviderUnavailableException;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

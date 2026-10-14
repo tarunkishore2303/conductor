@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -92,9 +96,7 @@ class SimilarIncidentServiceTest {
                     client,
                     new IncidentDocumentBuilder(),
                     JsonMapper.builder().build(),
-                    model,
-                    0.93,
-                    "fake",
+                    new com.tarunkishore.loom_api.config.IncidentProperties(model, "fake", 0.93, false),
                     new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
 
     AiFailureAnalysis analysis(UUID id, UUID jobId, UUID taskId) {

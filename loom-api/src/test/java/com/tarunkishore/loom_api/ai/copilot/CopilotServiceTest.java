@@ -1,5 +1,9 @@
 package com.tarunkishore.loom_api.ai.copilot;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.tarunkishore.loom_api.ai.*;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,7 +33,7 @@ class CopilotServiceTest {
     }
 
     CopilotService service(Duration timeout) {
-        return new CopilotService(client, tools, analyses, new JsonMapper(), metrics, timeout);
+        return new CopilotService(client, tools, analyses, new JsonMapper(), metrics, new com.tarunkishore.loom_api.config.CopilotProperties(timeout));
     }
 
     CopilotClient.Result action(String tool) {

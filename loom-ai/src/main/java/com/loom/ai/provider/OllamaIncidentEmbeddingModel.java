@@ -1,8 +1,8 @@
 package com.loom.ai.provider;
 
 import com.loom.ai.model.IncidentEmbeddingModel;
-import com.loom.ai.service.AiProviderUnavailableException;
-import com.loom.ai.service.AiOutputValidationException;
+import com.loom.ai.exception.AiProviderUnavailableException;
+import com.loom.ai.exception.AiOutputValidationException;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingRequest;
 import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;

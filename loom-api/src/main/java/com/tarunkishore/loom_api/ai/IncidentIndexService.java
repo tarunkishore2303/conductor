@@ -1,12 +1,16 @@
 package com.tarunkishore.loom_api.ai;
 
+import com.tarunkishore.loom_api.exception.AiUnavailableException;
+
+import com.tarunkishore.loom_api.exception.AiOutputException;
+
 import com.tarunkishore.loom_api.repository.*;
 
 import jakarta.annotation.PreDestroy;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.tarunkishore.loom_api.config.IncidentProperties;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
@@ -43,17 +47,14 @@ public class IncidentIndexService {
             IncidentAiClient client,
             IncidentDocumentBuilder documents,
             ObjectMapper mapper,
-            @Value("${conductor.ai.embedding-model:nomic-embed-text:v1.5}") String model,
-            @Value("${conductor.ai.incident-auto-index-enabled:false}") boolean autoIndexEnabled) {
-        if (model == null || model.isBlank() || model.length() > 128)
-            throw new IllegalArgumentException("Invalid embedding model");
+            IncidentProperties properties) {
         this.analyses = analyses;
         this.vectors = vectors;
         this.client = client;
         this.documents = documents;
         this.mapper = mapper;
-        this.model = model;
-        this.autoIndexEnabled = autoIndexEnabled;
+        this.model = properties.embeddingModel();
+        this.autoIndexEnabled = properties.incidentAutoIndexEnabled();
     }
 
     @EventListener

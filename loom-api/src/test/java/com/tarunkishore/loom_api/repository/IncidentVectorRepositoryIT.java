@@ -1,7 +1,7 @@
 package com.tarunkishore.loom_api.repository;
 
 import org.junit.jupiter.api.Test;
-import com.tarunkishore.loom_api.ai.AiOutputException;
+import com.tarunkishore.loom_api.exception.AiOutputException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
