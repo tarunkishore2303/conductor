@@ -41,6 +41,21 @@ class TaskCapabilityContractsTest {
     void codecDoesNotCoerceNumericValues(String config) {
         assertThatThrownBy(() -> codec.decode(TaskType.DELAY, config)).isInstanceOf(IllegalArgumentException.class);
     }
+    @ParameterizedTest @ValueSource(strings = {"{\"durationMillis\":1.5}", "{\"durationMillis\":\"1\"}", "{\"durationMillis\":null}", "{}"})
+    void permissiveHttpMapperCannotCoerceOrOmitDelayDuration(String config) {
+        var permissive = JsonMapper.builder().enable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
+                .enable(tools.jackson.databind.MapperFeature.ALLOW_COERCION_OF_SCALARS)
+                .disable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES).build();
+        assertThatThrownBy(() -> permissive.readValue(config, DelayTaskConfig.class)).isInstanceOf(RuntimeException.class);
+    }
+    @ParameterizedTest @ValueSource(strings = {"1.5", "\"1\"", "null", "MISSING"})
+    void permissiveHttpMapperCannotCoerceOrOmitHttpTimeout(String timeout) {
+        var permissive = JsonMapper.builder().enable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
+                .enable(tools.jackson.databind.MapperFeature.ALLOW_COERCION_OF_SCALARS).build();
+        String config = "{\"method\":\"GET\",\"url\":\"https://example.test\"" +
+                ("MISSING".equals(timeout) ? "" : ",\"timeoutMillis\":" + timeout) + "}";
+        assertThatThrownBy(() -> permissive.readValue(config, TaskConfig.class)).isInstanceOf(RuntimeException.class);
+    }
     @Test void unsupportedTaskTypeCannotDeserialize() {
         assertThatThrownBy(() -> JsonMapper.builder().build().readValue("\"SHELL\"", TaskType.class)).isInstanceOf(RuntimeException.class);
     }
