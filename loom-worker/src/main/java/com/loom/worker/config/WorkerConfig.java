@@ -9,6 +9,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
 @Configuration
+@org.springframework.boot.context.properties.EnableConfigurationProperties(DemoProperties.class)
 public class WorkerConfig {
 
     @Bean
