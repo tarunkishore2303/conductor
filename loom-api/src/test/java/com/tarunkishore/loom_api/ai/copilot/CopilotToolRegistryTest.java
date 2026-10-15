@@ -49,7 +49,7 @@ class CopilotToolRegistryTest {
     void oversizedEvidenceFailsExplicitlyWithoutSilentTruncation() {
         when(reads.getTasks(jobId, false)).thenReturn(new CopilotReadService.TaskFacts(jobId,
                 List.of(new CopilotReadService.TaskState(UUID.randomUUID(), "x".repeat(5000),
-                        "PENDING", 1, null))));
+                        "PENDING", 1, null, 0, false, com.loom.capability.TaskType.NOOP))));
         var result = registry.execute("getTasks", null, scope);
         assertThat(result.errorCode()).isEqualTo("CONTEXT_LIMIT");
         assertThat(result.references()).isEmpty();
@@ -80,7 +80,7 @@ class CopilotToolRegistryTest {
     void runAndTaskFactsHaveReferencesForBothIds() {
         UUID taskId = UUID.randomUUID();
         when(reads.getTasks(jobId, true)).thenReturn(new CopilotReadService.TaskFacts(jobId,
-                List.of(new CopilotReadService.TaskState(taskId, "failed", "DEAD_LETTERED", 1, null))));
+                List.of(new CopilotReadService.TaskState(taskId, "failed", "DEAD_LETTERED", 1, null, 1, true, com.loom.capability.TaskType.NOOP))));
         var result = registry.execute("getFailedTasks", null, scope);
         assertThat(result.success()).isTrue();
         assertThat(result.references()).containsExactly(

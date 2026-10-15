@@ -1,6 +1,7 @@
 package com.tarunkishore.loom_api.ai.copilot;
 
 import com.loom.common.dto.TaskDefinition;
+import com.loom.capability.TaskType;
 import com.loom.common.model.Job;
 import com.loom.common.model.Task;
 import com.loom.common.model.TaskExecution;
@@ -85,12 +86,17 @@ public class CopilotReadService {
     @Transactional(readOnly = true)
     public TaskFacts getTasks(UUID jobId, boolean failedOnly) {
         Job job = job(jobId);
+        var recordedAttempts = attempts(jobId);
+        boolean retryHistoryComplete = completeHistory(job, recordedAttempts);
         var tasks = job.getTasks().stream()
                 .filter(t -> !failedOnly || t.getStatus() == TaskStatus.FAILED
                         || t.getStatus() == TaskStatus.DEAD_LETTERED)
                 .sorted(Comparator.comparing(Task::getId))
                 .map(t -> new TaskState(t.getId(), safe(t.getName()), t.getStatus().name(),
-                        t.getMaxRetries(), t.getDeadLetteredAt())).toList();
+                        t.getMaxRetries(), t.getDeadLetteredAt(), recordedAttempts.stream()
+                                .filter(attempt -> t.getId().equals(attempt.getTask().getId()))
+                                .filter(attempt -> attempt.getAttemptNumber() != null && attempt.getAttemptNumber() > 0)
+                                .count(), retryHistoryComplete, t.getTaskType())).toList();
         return new TaskFacts(job.getId(), tasks);
     }
 
@@ -139,10 +145,10 @@ public class CopilotReadService {
         if (tasks.stream().anyMatch(t -> t.dependsOn().size() > 50)) {
             throw new ToolReadException("CONTEXT_LIMIT", "Workflow dependencies exceed bounded context");
         }
-        var sanitized = tasks.stream().map(t -> new TaskDefinition(safe(t.taskId()), safe(t.name()),
-                t.dependsOn().stream().map(CopilotReadService::safe).toList(), t.maxRetries())).toList();
+        var sanitized = tasks.stream().map(t -> new WorkflowTaskFacts(safe(t.taskId()), safe(t.name()),
+                t.dependsOn().stream().map(CopilotReadService::safe).toList(), t.maxRetries(), t.type())).toList();
         return new WorkflowFacts(template.getId(), safe(template.getName()), safe(template.getDescription()),
-                sanitized, "NOOP simulation only; task names do not grant executable capabilities");
+                sanitized, "Supported capabilities: NOOP, DELAY, HTTP_REQUEST, TRANSFORM. Transform input is static; generalized dataflow is unavailable. Task configuration is omitted from copilot evidence.");
     }
 
     private Job job(UUID id) {
@@ -232,14 +238,17 @@ public class CopilotReadService {
     public record ObservedTaskDuration(UUID taskId, String name, long recordedActiveDurationMillis,
             Double shareOfAggregateRecordedTaskDuration, int validTimedAttempts, boolean recordedTimingComplete) {}
     private record Timing(long totalMillis, List<ObservedTaskDuration> slowestTasks, boolean complete) {}
-    public record TaskState(UUID taskId, String name, String status, int maxRetries, Instant deadLetteredAt) {}
+    /** Recorded retries are observed attempts, not the configured retry limit. Completeness is conservative run-wide. */
+    public record TaskState(UUID taskId, String name, String status, int maxRetries, Instant deadLetteredAt,
+            long recordedRetries, boolean retryHistoryComplete, TaskType type) {}
     public record TaskFacts(UUID jobId, List<TaskState> tasks) {}
     public record Attempt(Integer attemptNumber, String status, Instant startedAt, Instant completedAt,
             String errorType, String errorMessage, Instant retryScheduledAt) {}
     public record TaskAttemptFacts(UUID jobId, UUID taskId, String name, String status,
             Instant deadLetteredAt, List<Attempt> attempts, List<String> unavailableEvidence) {}
+    public record WorkflowTaskFacts(String taskId, String name, List<String> dependsOn, int maxRetries, TaskType type) {}
     public record WorkflowFacts(UUID workflowId, String name, String description,
-            List<TaskDefinition> tasks, String capability) {}
+            List<WorkflowTaskFacts> tasks, String capability) {}
     public record TaskSnapshot(UUID taskId, String name, String status, int maxRetries,
             Instant deadLetteredAt, List<Attempt> attempts) {}
     public record RunSnapshot(UUID jobId, String name, String status, Instant createdAt,

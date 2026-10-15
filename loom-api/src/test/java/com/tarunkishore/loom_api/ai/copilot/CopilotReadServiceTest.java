@@ -185,4 +185,55 @@ class CopilotReadServiceTest {
         assertThatThrownBy(() -> reads.getSimilarIncidents(jobId, 6))
                 .isInstanceOf(CopilotReadService.ToolReadException.class);
     }
+    @Test
+    void failedTaskRetriesComeFromAttemptsNotConfiguredMaximum() {
+        failed.setMaxRetries(5);
+        when(evidence.findForJob(eq(jobId), any())).thenReturn(List.of(
+                attempt(failed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:01Z"),
+                attempt(failed, 1, "2026-10-07T10:00:03Z", "2026-10-07T10:00:04Z"),
+                attempt(failed, 2, "2026-10-07T10:00:05Z", "2026-10-07T10:00:06Z"),
+                attempt(completed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:02Z")));
+        var task = reads.getTasks(jobId, true).tasks().getFirst();
+        assertThat(task.maxRetries()).isEqualTo(5);
+        assertThat(task.recordedRetries()).isEqualTo(2);
+        assertThat(task.retryHistoryComplete()).isTrue();
+        verify(evidence, times(1)).findForJob(eq(jobId), any());
+        verifyNoInteractions(analyses, incidents, workflows);
+    }
+    @Test
+    void taskRetryCountsMarkGappedOrLegacyEvidenceIncomplete() {
+        when(evidence.findForJob(eq(jobId), any())).thenReturn(List.of(
+                attempt(failed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:01Z"),
+                attempt(failed, 2, "2026-10-07T10:00:03Z", "2026-10-07T10:00:04Z"),
+                attempt(completed, null, "2026-10-07T10:00:00Z", "2026-10-07T10:00:02Z")));
+        var facts = reads.getTasks(jobId, false);
+        assertThat(facts.tasks()).allMatch(task -> !task.retryHistoryComplete());
+        assertThat(facts.tasks().stream().filter(task -> failed.getId().equals(task.taskId())).findFirst().orElseThrow().recordedRetries())
+                .isEqualTo(1);
+        assertThat(facts.tasks().stream().filter(task -> completed.getId().equals(task.taskId())).findFirst().orElseThrow().recordedRetries())
+                .isZero();
+        verify(evidence, times(1)).findForJob(eq(jobId), any());
+    }
+
+    @Test
+    void realCapabilityTypesRemainVisibleWithoutExposingTaskConfiguration() {
+        UUID workflowId = UUID.randomUUID();
+        var template = new WorkflowTemplate();
+        template.setId(workflowId);
+        template.setName("HTTP workflow");
+        template.setDagDefinitionJson("""
+                [{"taskId":"fetch","name":"Fetch","dependsOn":[],"maxRetries":2,"type":"HTTP_REQUEST", "config":{
+                    "method":"POST","url":"https://example.test/private-endpoint","timeoutMillis":1000,
+                    "contentType":"application/json","body":"sensitive-payload"}}]
+                """);
+        when(workflows.findById(workflowId)).thenReturn(Optional.of(template));
+        var facts = reads.getWorkflow(workflowId);
+        assertThat(facts.tasks().getFirst().type()).isEqualTo(com.loom.capability.TaskType.HTTP_REQUEST);
+        assertThat(facts.capability()).contains("Task configuration is omitted").doesNotContain("NOOP simulation only");
+        String serialized = JsonMapper.builder().build().writeValueAsString(facts);
+        assertThat(serialized).contains("HTTP_REQUEST").doesNotContain("private-endpoint", "sensitive-payload", "timeoutMillis", "\"config\"");
+        failed.setTaskType(com.loom.capability.TaskType.HTTP_REQUEST);
+        assertThat(reads.getTasks(jobId, true).tasks().getFirst().type()).isEqualTo(com.loom.capability.TaskType.HTTP_REQUEST);
+    }
+
 }
