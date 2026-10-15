@@ -9,6 +9,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import com.loom.capability.TaskType;
 
 @Entity
 @Table(name = "tasks")
@@ -26,6 +27,15 @@ public class Task {
 
     @Column(nullable = false)
     private String name;
+
+    @Enumerated(EnumType.STRING)
+    @org.hibernate.annotations.ColumnDefault("'NOOP'")
+    @Column(name = "task_type", nullable = false, length = 32)
+    private TaskType taskType = TaskType.NOOP;
+
+    @org.hibernate.annotations.ColumnDefault("'{}'")
+    @Column(name = "task_config_json", nullable = false, columnDefinition = "TEXT")
+    private String taskConfigJson = "{}";
 
     @Transient
     private String logicalId;

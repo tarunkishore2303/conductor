@@ -3,6 +3,8 @@ plugins {
     id 'org.springframework.boot'
 }
 dependencies {
+    implementation project(':loom-observability')
+    implementation 'org.apache.httpcomponents.client5:httpclient5'
     implementation project(':loom-common')
 
     implementation 'org.springframework.boot:spring-boot-starter-webmvc'
