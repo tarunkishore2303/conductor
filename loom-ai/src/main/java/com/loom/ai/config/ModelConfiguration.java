@@ -10,6 +10,8 @@ import com.loom.ai.model.IncidentSynthesisModel;
 import com.loom.ai.provider.OllamaIncidentEmbeddingModel;
 import com.loom.ai.provider.OllamaIncidentSynthesisModel;
 import com.loom.ai.model.WorkflowGenerationModel;
+import com.loom.capability.TaskCapabilityCatalog;
+import tools.jackson.databind.json.JsonMapper;
 import com.loom.ai.provider.OllamaFailureInterpretationModel;
 import com.loom.ai.provider.OllamaStructuredOutput;
 import com.loom.ai.provider.OllamaWorkflowGenerationModel;
@@ -59,11 +61,12 @@ public class ModelConfiguration {
     }
 
     @Bean
-    WorkflowGenerationModel workflowGenerationModel(AiProperties properties) throws IOException {
+    WorkflowGenerationModel workflowGenerationModel(AiProperties properties, TaskCapabilityCatalog catalog) throws IOException {
         if (!properties.enabled()) {
             return prompt -> { throw new AiProviderUnavailableException(); };
         }
-        return new OllamaWorkflowGenerationModel(structuredOutput(properties), prompt("workflow-generation.txt"));
+        return new OllamaWorkflowGenerationModel(structuredOutput(properties), prompt("workflow-generation.txt") + "\nApplication-owned capability catalog:\n"
+                + JsonMapper.builder().build().writeValueAsString(catalog.capabilities()));
     }
 
     @Bean

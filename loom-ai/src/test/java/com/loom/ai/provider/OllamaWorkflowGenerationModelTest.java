@@ -33,7 +33,7 @@ class OllamaWorkflowGenerationModelTest {
         var captor = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(captor.capture());
         var options = (OllamaChatOptions) captor.getValue().getOptions();
-        assertThat(options.getOutputSchema()).contains("required", "tasks", "identifier");
+        assertThat(options.getOutputSchema()).contains("required", "tasks", "identifier", "HTTP_REQUEST", "TRANSFORM", "DELAY", "additionalProperties");
         assertThat(captor.getValue().getInstructions()).hasSize(2);
     }
     @Test
@@ -74,6 +74,22 @@ class OllamaWorkflowGenerationModelTest {
         assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiProviderUnavailableException.class)
                 .hasMessageNotContaining("secret");
     }
+    @Test
+    void parsesTypedConfigurationFromStructuredResponse() {
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"name":"Wait","description":"Demo","tasks":[{"identifier":"wait","name":"Wait","type":"DELAY","dependencies":[],"maxRetries":0,"config":{"durationMillis":1}}]}
+                """));
+        assertThat(model.generate("wait").tasks().getFirst().config())
+                .isEqualTo(new com.loom.capability.DelayTaskConfig(1));
+    }
+    @Test
+    void rejectsUnknownConfigurationFields() {
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"name":"Wait","description":"Demo","tasks":[{"identifier":"wait","name":"Wait","type":"DELAY","dependencies":[],"maxRetries":0,"config":{"durationMillis":1,"script":"arbitrary"}}]}
+                """));
+        assertThatThrownBy(() -> model.generate("wait")).isInstanceOf(AiOutputValidationException.class);
+    }
+
     private ChatResponse response(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
     }

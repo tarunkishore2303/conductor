@@ -13,10 +13,11 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.List;
+import com.loom.capability.*;
 import static org.assertj.core.api.Assertions.*;
 
 class WorkflowGenerationServiceTest {
-    private final ProposalShapeValidator validator = new ProposalShapeValidator();
+    private final ProposalShapeValidator validator = new ProposalShapeValidator(capabilities());
     private final AiProperties properties = new AiProperties(false, "http://localhost:11434", "model", 0, Duration.ofSeconds(1), 100);
 
     @Test
@@ -57,4 +58,35 @@ class WorkflowGenerationServiceTest {
     private GeneratedWorkflowProposal proposal(String type, List<String> dependencies) {
         return new GeneratedWorkflowProposal("Orders", "Demo", List.of(new GeneratedTaskProposal("download", "Download", type, dependencies, 1)));
     }
+    @Test
+    void acceptsOnlyValidTypedCapabilities() {
+        var tasks = List.of(
+                new GeneratedTaskProposal("fetch", "Fetch", "HTTP_REQUEST", List.of(), 1,
+                        new HttpRequestTaskConfig("GET", "https://example.test/orders", 1000, null, null)),
+                new GeneratedTaskProposal("wait", "Wait", "DELAY", List.of("fetch"), 0, new DelayTaskConfig(0)),
+                new GeneratedTaskProposal("select", "Select", "TRANSFORM", List.of("wait"), 0,
+                        new TransformTaskConfig("JSON_SELECT", "{}", List.of("id"), java.util.Map.of())));
+        assertThatCode(() -> validator.validate(new GeneratedWorkflowProposal("Real", "static inputs", tasks)))
+                .doesNotThrowAnyException();
+    }
+    @Test
+    void rejectsWrongConfigurationType() {
+        var task = new GeneratedTaskProposal("wait", "Wait", "DELAY", List.of(), 0, new NoOpTaskConfig());
+        assertThatThrownBy(() -> validator.validate(new GeneratedWorkflowProposal("Demo", "desc", List.of(task))))
+                .isInstanceOf(AiOutputValidationException.class);
+    }
+    @Test
+    void rejectsMissingConfigurationForRealCapability() {
+        var task = new GeneratedTaskProposal("wait", "Wait", "DELAY", List.of(), 0, null);
+        assertThatThrownBy(() -> validator.validate(new GeneratedWorkflowProposal("Demo", "desc", List.of(task))))
+                .isInstanceOf(AiOutputValidationException.class);
+    }
+
+    private static TaskCapabilityValidators capabilities() {
+        var properties = TaskProperties.defaults();
+        return new TaskCapabilityValidators(List.of(new NoOpTaskConfigValidator(),
+                new DelayTaskConfigValidator(properties), new HttpRequestTaskConfigValidator(properties),
+                new TransformTaskConfigValidator(properties)));
+    }
+
 }

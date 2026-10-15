@@ -3,11 +3,15 @@ package com.loom.ai.validation;
 import com.loom.ai.exception.AiOutputValidationException;
 
 import com.loom.ai.model.GeneratedWorkflowProposal;
+import com.loom.capability.TaskCapabilityValidators;
+import com.loom.capability.TaskType;
 import org.springframework.stereotype.Component;
 
 /** Shape checks only; the API's existing DAG validator owns graph semantics. */
 @Component
 public class ProposalShapeValidator {
+    private final TaskCapabilityValidators capabilities;
+    public ProposalShapeValidator(TaskCapabilityValidators capabilities) { this.capabilities = capabilities; }
     public void validate(GeneratedWorkflowProposal proposal) {
         if (proposal == null) fail("AI returned an empty workflow.");
         text(proposal.name(), 255, "workflow name");
@@ -18,7 +22,11 @@ public class ProposalShapeValidator {
             text(task.identifier(), 64, "task identifier");
             if (!task.identifier().matches("[A-Za-z][A-Za-z0-9_-]*")) fail("Invalid task identifier.");
             text(task.name(), 255, "task name");
-            if (!"NOOP".equals(task.type())) fail("Unsupported task type. Only NOOP is currently available.");
+            try {
+                capabilities.validate(taskType(task.type()), task.config());
+            } catch (IllegalArgumentException invalid) {
+                fail("Invalid task capability: " + invalid.getMessage());
+            }
             if (task.maxRetries() == null || task.maxRetries() < 0 || task.maxRetries() > 5) fail("Task retries must be between 0 and 5.");
             if (task.dependencies() == null || task.dependencies().size() > 50) fail("Invalid task dependencies.");
             for (String dependency : task.dependencies()) text(dependency, 64, "dependency");
@@ -28,4 +36,9 @@ public class ProposalShapeValidator {
         if (value == null || value.isBlank() || value.length() > max) fail("Invalid " + field + ".");
     }
     private void fail(String message) { throw new AiOutputValidationException(message); }
+    private static TaskType taskType(String value) {
+        try { return TaskType.valueOf(value == null ? "" : value); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Unsupported task type"); }
+    }
+
 }
