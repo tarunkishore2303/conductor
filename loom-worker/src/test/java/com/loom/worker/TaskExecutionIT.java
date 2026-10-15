@@ -10,7 +10,12 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
+import com.loom.capability.*;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,6 +43,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 @Testcontainers
 class TaskExecutionIT {
+
+    private static HttpServer http;
+    private static java.util.concurrent.ExecutorService httpExecutor;
+
+    @BeforeAll static void startHttpEndpoint() throws Exception {
+        http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        httpExecutor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+        http.setExecutor(httpExecutor);
+        http.createContext("/healthy", exchange -> {
+            exchange.sendResponseHeaders(200, 2);
+            exchange.getResponseBody().write(new byte[] {'o', 'k'});
+            exchange.close();
+        });
+        http.createContext("/unavailable", exchange -> {
+            exchange.sendResponseHeaders(500, -1);
+            exchange.close();
+        });
+        http.start();
+    }
+
+    @AfterAll static void stopHttpEndpoint() {
+        if (http != null) http.stop(0);
+        if (httpExecutor != null) httpExecutor.shutdownNow();
+    }
 
     @Container
     static final PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:15")
@@ -67,11 +96,13 @@ class TaskExecutionIT {
         registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
         registry.add("spring.flyway.enabled", () -> "false");
         registry.add("conductor.demo.failures-enabled", () -> "true");
+        registry.add("conductor.tasks.http.allow-private-addresses", () -> "true");
     }
 
     @Autowired WorkerTaskRepository taskRepo;
     @Autowired JdbcTemplate jdbc;
     @Autowired KafkaTemplate<String, Object> kafkaTemplate;
+    @Autowired TaskConfigCodec configCodec;
 
     private KafkaConsumer<String, TaskResultEvent> resultConsumer;
 
@@ -218,4 +249,78 @@ class TaskExecutionIT {
                 "SELECT count(*) FROM task_executions WHERE task_id = ? AND retry_scheduled_at IS NOT NULL",
                 Integer.class, taskId)).isEqualTo(2);
     }
+
+    @Test
+    void realHttpTaskCompletesUsingPersistedCapabilityConfiguration() {
+        var config = new HttpRequestTaskConfig("GET", localUrl("/healthy"), 2000, null, null);
+        UUID taskId = insertCapabilityTask("real-http", TaskType.HTTP_REQUEST, config, 0);
+        dispatch(taskId, "real-http", 0);
+        awaitComplete(taskId);
+        var task = taskRepo.findById(taskId).orElseThrow();
+        assertThat(task.getTaskType()).isEqualTo(TaskType.HTTP_REQUEST);
+        assertThat(configCodec.decode(task.getTaskType(), task.getTaskConfigJson())).isEqualTo(config);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id = ? AND status = 'COMPLETE'", Integer.class, taskId)).isEqualTo(1);
+    }
+
+    @Test
+    void realHttpFailureRetriesThreeAttemptsAndCommitsDlqEvidenceBeforeKafkaResult() {
+        resultConsumer = buildResultConsumer();
+        UUID taskId = insertCapabilityTask("real-http-failure", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("GET", localUrl("/unavailable"), 2000, null, null), 2);
+        dispatch(taskId, "real-http-failure", 2);
+        Awaitility.await().atMost(25, TimeUnit.SECONDS).untilAsserted(() -> {
+            var records = resultConsumer.poll(Duration.ofMillis(500));
+            boolean found = false;
+            for (var record : records) {
+                if (taskId.toString().equals(record.key()) && record.value().status() == TaskStatus.DEAD_LETTERED) {
+                    // Receipt proves the observable result follows committed execution evidence.
+                    var task = taskRepo.findById(taskId).orElseThrow();
+                    assertThat(task.getStatus()).isEqualTo(TaskStatus.DEAD_LETTERED);
+                    assertThat(task.getRetryCount()).isEqualTo(2);
+                    assertThat(task.getDeadLetteredAt()).isNotNull();
+                    assertThat(record.value().errorMessage()).isEqualTo("HTTP endpoint returned status 500");
+                    assertThat(jdbc.queryForList("SELECT attempt_number FROM task_executions WHERE task_id = ? ORDER BY attempt_number", Integer.class, taskId))
+                            .containsExactly(0, 1, 2);
+                    assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id = ? AND error_type = 'HTTP_STATUS_500' AND error_message = 'HTTP endpoint returned status 500' AND completed_at IS NOT NULL", Integer.class, taskId)).isEqualTo(3);
+                    assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id = ? AND retry_scheduled_at IS NOT NULL", Integer.class, taskId)).isEqualTo(2);
+                    found = true;
+                }
+            }
+            assertThat(found).isTrue();
+        });
+    }
+
+    @Test
+    void delayCapabilityExecutesThroughKafkaWorkerRegistry() {
+        UUID taskId = insertCapabilityTask("real-delay", TaskType.DELAY, new DelayTaskConfig(1), 0);
+        dispatch(taskId, "real-delay", 0);
+        awaitComplete(taskId);
+    }
+
+    @Test
+    void staticTransformCapabilityExecutesThroughKafkaWorkerRegistry() {
+        UUID taskId = insertCapabilityTask("real-transform", TaskType.TRANSFORM,
+                new TransformTaskConfig("JSON_SELECT", "{\"id\":42,\"internal\":\"omitted\"}", List.of("id"), Map.of()), 0);
+        dispatch(taskId, "real-transform", 0);
+        awaitComplete(taskId);
+    }
+
+    private UUID insertCapabilityTask(String name, TaskType type, TaskConfig config, int maxRetries) {
+        UUID taskId = insertJobAndTask(name);
+        jdbc.update("UPDATE tasks SET task_type = ?, task_config_json = ?, max_retries = ? WHERE id = ?",
+                type.name(), configCodec.encode(config), maxRetries, taskId);
+        return taskId;
+    }
+
+    private void dispatch(UUID taskId, String name, int maxRetries) {
+        UUID jobId = UUID.fromString(jdbc.queryForObject("SELECT job_id FROM tasks WHERE id = ?", String.class, taskId));
+        kafkaTemplate.send("task-queue", taskId.toString(), new TaskEvent(jobId, taskId, name, maxRetries, 0));
+    }
+
+    private void awaitComplete(UUID taskId) {
+        Awaitility.await().atMost(20, TimeUnit.SECONDS).untilAsserted(() ->
+                assertThat(taskRepo.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.COMPLETE));
+    }
+
+    private static String localUrl(String path) { return "http://127.0.0.1:" + http.getAddress().getPort() + path; }
 }
