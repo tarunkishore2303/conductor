@@ -14,6 +14,7 @@ import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 import java.time.Instant;
 import java.util.List;
+import com.loom.capability.*;
 import java.util.Optional;
 import java.util.UUID;
 import static org.assertj.core.api.Assertions.*;
@@ -22,7 +23,7 @@ class AiWorkflowProposalServiceTest {
     AiWorkflowClient client = mock(AiWorkflowClient.class);
     AiWorkflowProposalRepository repo = mock(AiWorkflowProposalRepository.class);
     WorkflowService workflows = mock(WorkflowService.class);
-    WorkflowProposalValidator validator = new WorkflowProposalValidator(new DAGValidator());
+    WorkflowProposalValidator validator = new WorkflowProposalValidator(new DAGValidator(), capabilities());
     AiWorkflowProposalService service = new AiWorkflowProposalService(client, validator, repo, workflows, JsonMapper.builder().build());
     GeneratedWorkflow valid = new GeneratedWorkflow("orders", "demo", List.of(
             task("download", List.of()), task("left", List.of("download")),
@@ -141,4 +142,43 @@ class AiWorkflowProposalServiceTest {
                 .isInstanceOf(AiOutputException.class);
         verifyNoInteractions(workflows);
     }
+    @Test
+    void mixedCapabilitiesRemainPreviewOnlyAndPreserveConfig() {
+        var generated = new GeneratedWorkflow("real", "static inputs", List.of(
+                new GeneratedWorkflow.Task("fetch", "Fetch", "HTTP_REQUEST", List.of(), 1,
+                        new HttpRequestTaskConfig("GET", "https://example.test/orders", 1000, null, null)),
+                new GeneratedWorkflow.Task("wait", "Wait", "DELAY", List.of("fetch"), 0, new DelayTaskConfig(1)),
+                new GeneratedWorkflow.Task("select", "Select", "TRANSFORM", List.of("wait"), 0,
+                        new TransformTaskConfig("JSON_SELECT", "{\"id\":42}", List.of("id"), java.util.Map.of()))));
+        when(client.generate(anyString())).thenReturn(new AiWorkflowClient.Generation(generated, "fake"));
+        var preview = service.generate("mixed");
+        assertThat(preview.validation().valid()).isTrue();
+        assertThat(preview.workflow().tasks()).extracting(GeneratedWorkflow.Task::type)
+                .containsExactly("HTTP_REQUEST", "DELAY", "TRANSFORM");
+        assertThat(validator.map(generated).tasks().get(1).config()).isEqualTo(new DelayTaskConfig(1));
+        verifyNoInteractions(workflows);
+    }
+    @Test
+    void invalidGeneratedCapabilityDoesNotPersistProposalOrWorkflow() {
+        var generated = new GeneratedWorkflow("invalid", "demo", List.of(
+                new GeneratedWorkflow.Task("wait", "Wait", "DELAY", List.of(), 0, new DelayTaskConfig(-1))));
+        when(client.generate(anyString())).thenReturn(new AiWorkflowClient.Generation(generated, "fake"));
+        assertThatThrownBy(() -> service.generate("invalid delay")).isInstanceOf(AiOutputException.class);
+        verifyNoInteractions(repo, workflows);
+    }
+    @Test
+    void approvalRevalidatesStoredCapability() {
+        var proposal = generatedEntity();
+        proposal.setWorkflowJson("{\"name\":\"bad\",\"tasks\":[{\"identifier\":\"A\",\"name\":\"A\",\"type\":\"DELAY\",\"config\":{\"durationMillis\":30001},\"dependencies\":[],\"maxRetries\":0}]}");
+        assertThatThrownBy(() -> service.approve(proposal.getId())).isInstanceOf(AiOutputException.class);
+        verifyNoInteractions(workflows);
+    }
+
+    private static TaskCapabilityValidators capabilities() {
+        var properties = TaskProperties.defaults();
+        return new TaskCapabilityValidators(List.of(new NoOpTaskConfigValidator(),
+                new DelayTaskConfigValidator(properties), new HttpRequestTaskConfigValidator(properties),
+                new TransformTaskConfigValidator(properties)));
+    }
+
 }
