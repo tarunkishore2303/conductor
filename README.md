@@ -2,7 +2,7 @@
 
 **Conductor evolves [Project Loom](https://github.com/tarunkishore2303/project-loom) into an intelligent distributed workflow platform.** This repository preserves Loom's original Git history. The orchestration modules retain their `loom-*` names while the platform evolves.
 
-The current release includes an isolated Ollama-powered AI service for structured workflow proposals, explicit approval, failure interpretation, and historical incident retrieval. Deterministic validation and execution remain in Conductor. Workers execute simulated no-op tasks, with opt-in fixed failures for the local demo.
+The current release includes an isolated Ollama-powered AI service for structured workflow proposals, explicit approval, failure interpretation, and historical incident retrieval. Deterministic validation and execution remain in Conductor. Workers execute typed NOOP, DELAY, HTTP_REQUEST and TRANSFORM capabilities through an IoC handler registry.
 
 See [runtime upgrade decisions and verification](docs/runtime-upgrade.md) for the
 Spring Boot 4, Java 25, and Podman migration details.
@@ -101,9 +101,9 @@ without another model call:
 .\scripts\ai-workflow-smoke.ps1 -ProposalId '<id from preview>' -Approve -Execute
 ```
 
-Workers currently support only simulated `NOOP` tasks. Names describe intended
-business operations; they do not download orders or generate invoices. Parallelism
-is a fixed DAG, without schedules or dynamic fan-out. Human review remains
+Generated workflows use only the supported capability catalog. A business task
+name does not create an integration: HTTP needs an explicit URL and transform
+input is static. Parallelism is a fixed DAG, without schedules or dynamic fan-out. Human review remains
 necessary: a valid graph does not guarantee the requested business semantics.
 Authentication/tenant isolation and expired-proposal cleanup are deferred.
 Workflow optimization and frontend AI are not implemented.
@@ -329,7 +329,81 @@ flowchart LR
 
 Typed configuration records group AI transport, failure-context limits, copilot deadlines and incident settings. Configuration is constructor-injected and validated during binding; existing environment variables and defaults are preserved. Provider timeout (120 seconds), API transport timeout (130 seconds) and copilot deadline (180 seconds) are distinct budgets. `AI_FAILURE_CONTEXT_MAX_CHARS` supplies the same default 32,768-character limit to API and AI. Invalid deadlines, context limits or similarity thresholds prevent startup rather than failing on a later request.
 
-The platform refactor adds no task capabilities or database migrations. Workers still support the existing simulated NOOP behavior; real handlers are a separate follow-up.
+Task capabilities extend these conventions with typed configuration, dedicated validators and bounded handler instrumentation.
+
+## Task capabilities
+
+```mermaid
+flowchart LR
+    Event[Kafka TaskEvent] --> Worker
+    Worker --> Lock[Redisson lock]
+    Lock --> Definition[Load persisted type and config]
+    Definition --> Registry[TaskHandlerRegistry]
+    Registry --> Handler[Typed handler]
+    Handler --> Evidence[Worker persistence and failure evidence]
+    Evidence --> Retry[Worker retry / DLQ]
+    Retry --> Result[After-commit TaskResultEvent]
+```
+
+| Type | Purpose | Important limits |
+|---|---|---|
+| NOOP | Orchestration and compatibility | Existing 50 ms simulation; no external work |
+| DELAY | Wait step | `durationMillis` 0–30,000; configurable lower ceiling |
+| HTTP_REQUEST | GET or POST | Total deadline ≤10 s, request body 16 KiB and response body 64 KiB by default; no redirects |
+| TRANSFORM | Static JSON_SELECT or JSON_RENAME | JSON object input 16 KiB by default; at most 50 simple top-level field names; no expressions |
+
+**Conductor does not execute arbitrary shell, code, JavaScript, Python or SQL.** No runtime plugin downloads are supported.
+
+`loom-task-capabilities` owns immutable typed configurations, validated `TaskProperties`, the application-owned capability catalog and a validator registry. Spring discovers handlers as beans; duplicate handler or validator registrations fail startup. Workers dispatch by `TaskType`, without a handler switch in the executor. Handlers cannot publish Kafka events, mutate task state, schedule retries or enter DLQ. Worker-owned retry semantics remain unchanged: execution failures retry through the existing exponential backoff policy, then become DEAD_LETTERED.
+
+Manual templates, direct jobs and AI proposals all pass capability checks plus DAG validation. `GET /api/v1/task-capabilities` exposes the catalog. Ollama receives that catalog and a strict four-capability JSON schema; model output is checked again deterministically. Preview, explicit approval through WorkflowService and separate execution remain required.
+
+Example task definitions:
+
+```json
+[
+  {"taskId":"check","name":"Check orders","type":"HTTP_REQUEST","config":{"method":"GET","url":"http://task-demo:8080/orders","timeoutMillis":2000},"dependsOn":[],"maxRetries":2},
+  {"taskId":"wait","name":"Wait briefly","type":"DELAY","config":{"durationMillis":100},"dependsOn":["check"],"maxRetries":0},
+  {"taskId":"select","name":"Select static fields","type":"TRANSFORM","config":{"operation":"JSON_SELECT","input":"{\"id\":42,\"internal\":\"omitted\"}","fields":["id"]},"dependsOn":["wait"],"maxRetries":0}
+]
+```
+
+JSON_RENAME uses `{"operation":"JSON_RENAME","input":"{\"customer_id\":42}","renames":{"customer_id":"customerId"}}`. Missing source fields and existing rename targets fail safely; fields are literal top-level names, not paths or scripts. Results are transient and bounded; the worker does not persist HTTP bodies or transform outputs.
+
+**Conductor currently orchestrates execution dependencies; generalized dataflow between arbitrary task outputs is not yet implemented.** The example's transform input is static and does not consume the HTTP response.
+
+### HTTP network boundary
+
+Only HTTP(S), GET and POST are accepted. URLs cannot contain credentials, query strings or fragments; custom headers and authentication are unsupported. Bodies must not contain secrets: secret-management integration is not implemented. No response headers/bodies or underlying network exception details are persisted. Controlled failures include HTTP_STATUS_500, HTTP_TIMEOUT, HTTP_CONNECTION_FAILURE and HTTP_RESPONSE_TOO_LARGE.
+
+Literal addresses are validated before persistence. At connection time, the reusable Apache client checks all resolved addresses and supplies those same addresses to its connection operator; there is no separate unguarded resolution. Default policy rejects loopback/private/ULA/shared address space. Metadata addresses (including mapped IPv4 and AWS IPv6), unspecified, link-local, multicast and selected reserved/translation/tunnel ranges remain blocked even with private opt-in. Redirects, automatic HTTP retries, cookies and decompression are disabled. Header count is limited to 64 and each header/status line to 8 KiB. A total task deadline bounds DNS/connect/read/slow-drip responses; an OS DNS lookup may outlive cancellation, with at most eight outstanding lookups per worker client. These application checks complement network egress controls; they cannot prove that every globally routable destination is trustworthy.
+
+Typed settings include `conductor.tasks.delay.max-duration`, `conductor.tasks.http.max-timeout`, `max-request-bytes`, `max-response-bytes`, `allow-private-addresses`, and `conductor.tasks.transform.max-input-bytes`. Startup validation enforces hard ceilings: delay 30 s, HTTP 10 s, request/input 64 KiB and response 1 MiB. Total serialized task config is capped at 64 KiB. Task deadlines fit within the existing 60 s Redis lease; database stalls and process crashes remain separate reliability concerns.
+
+### Local capability demo
+
+The fixed HTTP fixture is opt-in; it is a demo server, not an executable task capability:
+
+```powershell
+$env:AI_ENABLED='true'
+$env:TASK_HTTP_ALLOW_PRIVATE_ADDRESSES='true' # Demo only; default false
+.\scripts\compose.ps1 --profile ai --profile demo up -d --build
+python scripts/task-capabilities-smoke.py
+```
+
+The local broker defaults to three partitions so both workers can consume. If an existing `task-queue` was auto-created with one partition, expand it without deleting messages:
+
+```powershell
+.\scripts\compose.ps1 exec kafka kafka-topics --bootstrap-server kafka:29092 --alter --topic task-queue --partitions 3
+```
+
+Use `scripts/conductor-demo.http` for mixed workflows, HTTP 500 retries/DLQ, analysis, incident retrieval, Copilot and summary requests. Internal task URLs use `http://task-demo:8080`; the fixture is also inspectable at `http://localhost:18080/health`. Private-address opt-in is applied consistently to API, AI and both workers. Models still require explicit local pulls from the Ollama setup section; no cloud API or API key is used. On CPU-only hosts, the documented AI deadline overrides may be needed. Dockerfile Gradle commands prefer IPv4 during build downloads to mitigate observed Podman/WSL build-download timeouts; runtime networking is unchanged.
+
+V8 adds `tasks.task_type` (default NOOP) and bounded `tasks.task_config_json` (default `{}`). V1–V7 are unchanged. Old template JSON and callers omitting type/config remain NOOP; supplied incompatible config is rejected. Kafka TaskEvent stays unchanged because workers load the authoritative configuration from PostgreSQL.
+
+Handler metrics use `task_handler_requests_total`, `task_handler_failures_total` and `task_handler_duration_seconds`, tagged only by bounded handler type/outcome. Existing completion/failure counters remain with `handler_type` replacing arbitrary task-name tags; handler timing replaces the old duplicate worker timer. Panels are included in the existing Conductor Requests dashboard.
+
+Known reliability limits remain: retry timers are in memory, after-commit Kafka publication has a crash gap without an outbox, and HTTP side effects cannot be made exactly-once by a database transaction. A POST may repeat after a crash; downstream APIs must supply their own deduplication semantics. AI semantic correctness still requires human approval. There is no generalized dataflow, secret management or dynamic plugin system.
 
 ## Architecture
 
@@ -590,32 +664,43 @@ Key metrics:
 
 # Integration tests (requires a running Podman machine)
 ./gradlew integrationTest
+
+# Windows Podman/Testcontainers connection, if no Docker-compatible default pipe exists:
+# $env:DOCKER_HOST='npipe:////./pipe/podman-machine-default'
+# $env:TESTCONTAINERS_RYUK_DISABLED='true' # rootless Podman; normal test cleanup still runs
 ```
 
-Phase 6–7 verification on Java 25 / Podman passed `./gradlew build` (220 unit tests),
-`./gradlew :loom-api:integrationTest :loom-worker:integrationTest` (35 API and four worker
-integration tests), and `python -m unittest discover -s scripts/tests -v` (20 smoke-helper tests).
-Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka,
-and Redis containers without live Ollama calls.
+Real task capability verification on Java 25 / Podman passed:
 
-The live local demo verified three failed attempts, two retries, DLQ state, persisted
-analysis reuse, three 768-dimensional incident vectors, a timeout match at cosine
-similarity 0.9428, and an evidence-backed citation. The unrelated JSON failure was
-excluded. Stored analysis, search, and cached synthesis remained available with
-Ollama stopped; new embedding requests returned 503 and a normal two-task DAG
-completed through Kafka/scheduler/workers during that outage.
+- `./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon`: 420 unit tests, 40 API integration tests and eight worker integration tests; no failures or skips.
+- `python -m unittest discover -s scripts/tests -q`: 25 helper tests.
+- `git diff --check`: passed.
 
-### Plugging in Real Task Logic
+Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka
+and Redis containers without live Ollama calls. Migration coverage upgrades V7 data
+to V8 and preserves historical NOOP tasks.
 
-`loom-worker` ships a `NoOpTaskHandler` that sleeps 50ms. Implement `TaskHandler` and register it as a Spring bean to replace it:
+The local two-worker demo verified overlapping parallel branches, all four handlers,
+HTTP 500 attempts numbered 0, 1 and 2 followed by DLQ, and a real Ollama-generated
+proposal approved and executed through the normal workflow path. Failure analysis,
+local incident embeddings/retrieval, evidence-backed Copilot answers and successful/
+failed execution summaries were verified against those runs. Copilot tools expose
+recorded retry evidence separately from configured retry limits.
+
+With Ollama stopped, mixed-capability and legacy NOOP workflows still completed,
+the controlled HTTP failure still retried and entered DLQ, stored analysis and
+summaries remained readable, and indexed incident search remained available.
+Repeated summary generation reused the stored row; uncached workflow generation
+returned 503. Ollama was restarted after verification.
+
+### Extending task capabilities
+
+Capabilities are application-owned. A future addition requires a bounded task type/config, validator, catalog/schema entry and Spring handler bean; it must retain worker-owned persistence/retry/DLQ. Duplicate registrations fail startup. The current contract is:
 
 ```java
-@Component
-public class MyTaskHandler implements TaskHandler {
-    @Override
-    public void execute(TaskEvent event) throws Exception {
-        // real logic here
-    }
+public interface TaskHandler {
+    TaskType type();
+    TaskExecutionResult execute(TaskExecutionContext context) throws Exception;
 }
 ```
 

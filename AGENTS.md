@@ -8,7 +8,7 @@ Conductor extends Project Loom. Preserve its Git history and document that origi
 - AI must never schedule tasks, call workers, publish execution events, execute arbitrary SQL, or bypass DAG validation.
 - Manual workflow creation and AI approval must use the same WorkflowService validation and persistence path.
 - Generation creates a preview, not a workflow. Persist workflows only after explicit approval; execution remains a separate request.
-- Match generated capabilities to actual worker support. The current worker only simulates no-op tasks.
+- Match generated capabilities to the application-owned catalog: NOOP, DELAY, HTTP_REQUEST and static TRANSFORM. Handlers never own persistence, retries, DLQ, Kafka publication or locking. Do not add scripts or generalized dataflow implicitly.
 - Keep model-provider code in loom-ai; keep orchestration and workflow persistence in existing modules.
 - Use Ollama only for project AI capabilities. Do not introduce cloud model APIs or API-key requirements.
 - Scope changes incrementally. Do not add RAG, embeddings, copilot, failure analysis, optimization, or AI frontend until their phase is authorized.
