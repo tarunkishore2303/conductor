@@ -9,6 +9,7 @@
 @verifiedFailedRun = 3aa118dc-d9ea-48ce-b9ba-1b24e22882d4
 @verifiedAnalysis = b746b2a4-7346-4ade-b667-fff197a28f38
 @verifiedCompleteRun = c9115045-2bfa-4c96-9feb-b72943329a4d
+@taskDemoUrl = http://task-demo:8080
 
 ### API health
 GET {{baseUrl}}/actuator/health
@@ -237,3 +238,111 @@ GET {{baseUrl}}/api/v1/ai/runs/{{verifiedFailedRun}}/summary
 
 ### Local model operation metrics
 GET {{aiUrl}}/actuator/prometheus
+
+### Task capability catalog (no model call)
+GET {{baseUrl}}/api/v1/task-capabilities
+
+### Fixed demo endpoint (start --profile demo; private-address opt-in required)
+GET http://localhost:18080/health
+
+### Create a real mixed workflow: static inputs, parallel delay/notification branches
+# @name createRealWorkflow
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{
+  "name":"Real order API capability demo",
+  "tasks":[
+    {"taskId":"check","name":"Check orders","type":"HTTP_REQUEST","config":{"method":"GET","url":"{{taskDemoUrl}}/orders","timeoutMillis":2000},"dependsOn":[],"maxRetries":2},
+    {"taskId":"transform","name":"Select static customer fields","type":"TRANSFORM","config":{"operation":"JSON_SELECT","input":"{\"id\":42,\"email\":\"demo@example.test\",\"internal\":\"omitted\"}","fields":["id","email"]},"dependsOn":["check"],"maxRetries":0},
+    {"taskId":"delay","name":"Brief bounded wait","type":"DELAY","config":{"durationMillis":500},"dependsOn":["transform"],"maxRetries":0},
+    {"taskId":"notify","name":"Notify with static body","type":"HTTP_REQUEST","config":{"method":"POST","url":"{{taskDemoUrl}}/notify","timeoutMillis":2000,"contentType":"application/json","body":"{\"status\":\"READY\"}"},"dependsOn":["transform"],"maxRetries":2}
+  ]
+}
+
+### Execute separately
+# @name executeRealWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{createRealWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"Real capability execution"}
+
+### Inspect types, statuses and retry counts; repeat until COMPLETE
+GET {{baseUrl}}/api/v1/jobs/{{executeRealWorkflow.response.body.$.id}}
+
+### Create controlled HTTP 500 failure
+# @name createHttpFailure
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{"name":"Canonical real HTTP failure","tasks":[{"taskId":"httpFailure","name":"realHttpFailure","type":"HTTP_REQUEST","config":{"method":"GET","url":"{{taskDemoUrl}}/fail","timeoutMillis":2000},"dependsOn":[],"maxRetries":2}]}
+
+### Execute failure; attempts 0, 1, 2 should end in DLQ
+# @name executeHttpFailure
+POST {{baseUrl}}/api/v1/workflows/{{createHttpFailure.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"HTTP 500 retry and DLQ"}
+
+### Inspect until FAILED / DEAD_LETTERED / retryCount 2
+GET {{baseUrl}}/api/v1/jobs/{{executeHttpFailure.response.body.$.id}}
+
+### Analyze real HTTP failure (Ollama interpretation, deterministic evidence)
+# @name analyzeHttpFailure
+POST {{baseUrl}}/api/v1/ai/runs/{{executeHttpFailure.response.body.$.id}}/analyze-failure
+Content-Type: application/json
+
+{}
+
+### Index the persisted incident explicitly (safe to repeat)
+POST {{baseUrl}}/api/v1/ai/failure-analyses/{{analyzeHttpFailure.response.body.$.analysisId}}/index
+Content-Type: application/json
+
+{}
+
+### Retrieve real historical matches (run/analyze/index another failure for a closer match)
+GET {{baseUrl}}/api/v1/ai/runs/{{executeHttpFailure.response.body.$.id}}/similar-incidents?topK=3
+
+### Copilot reads stored failure analysis
+POST {{baseUrl}}/api/v1/ai/copilot/query
+Content-Type: application/json
+
+{"question":"Why did this run fail?","jobId":"{{executeHttpFailure.response.body.$.id}}"}
+
+### Copilot retries question (read-only)
+POST {{baseUrl}}/api/v1/ai/copilot/query
+Content-Type: application/json
+
+{"question":"How many retries happened? Which task entered the DLQ?","jobId":"{{executeHttpFailure.response.body.$.id}}"}
+
+### Generate/reuse real failure summary
+POST {{baseUrl}}/api/v1/ai/runs/{{executeHttpFailure.response.body.$.id}}/summary
+Content-Type: application/json
+
+{}
+
+### Read stored summary without a model call
+GET {{baseUrl}}/api/v1/ai/runs/{{executeHttpFailure.response.body.$.id}}/summary
+
+### Generate a real workflow proposal; no persistence as workflow or execution yet
+# @name generateRealWorkflow
+POST {{baseUrl}}/api/v1/ai/workflows/generate
+Content-Type: application/json
+
+{"prompt":"Create four sequential tasks: HTTP GET http://task-demo:8080/orders with timeoutMillis 2000; DELAY 100ms; TRANSFORM JSON_SELECT id from static input {\"id\":42,\"internal\":\"omit\"}; HTTP POST http://task-demo:8080/notify with application/json body {\"status\":\"READY\"} and timeoutMillis 2000. Use maxRetries 1. Do not use NOOP."}
+
+### Inspect the proposal's workflow and validation before approving
+GET {{baseUrl}}/api/v1/ai/workflows/proposals/{{generateRealWorkflow.response.body.$.proposalId}}
+
+### Explicit approval (does not execute)
+# @name approveRealWorkflow
+POST {{baseUrl}}/api/v1/ai/workflows/proposals/{{generateRealWorkflow.response.body.$.proposalId}}/approve
+Content-Type: application/json
+
+{}
+
+### Separate execution of the approved workflow
+POST {{baseUrl}}/api/v1/workflows/{{approveRealWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"AI proposed real workflow, human-approved execution"}
