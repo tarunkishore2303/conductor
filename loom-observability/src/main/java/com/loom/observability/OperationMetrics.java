@@ -17,6 +17,8 @@ public final class OperationMetrics {
         WORKFLOW_GENERATION("workflow_generation"), FAILURE_INTERPRETATION("failure_interpretation"),
         INCIDENT_SYNTHESIS("incident_synthesis"), EMBEDDING("embedding"),
         COPILOT_STEP("copilot_step"), EXECUTION_SUMMARY("execution_summary"),
+        OPTIMIZATION_INTERPRETATION("optimization_interpretation"),
+        OPTIMIZATION("optimization", "ai.optimization.requests", "ai.optimization.failures", "ai.optimization.duration"),
         COPILOT("copilot", "ai.copilot.requests", "ai.copilot.failures", "ai.copilot.duration"),
         SUMMARY("summary", "ai.summary.requests", "ai.summary.failures", "ai.summary.duration"),
         INCIDENT_SEARCH("incident_search", "ai.incident.search.requests", "ai.incident.search.failures", "ai.incident.search.duration"),
