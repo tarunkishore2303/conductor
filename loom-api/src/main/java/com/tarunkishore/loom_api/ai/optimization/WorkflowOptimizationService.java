@@ -86,12 +86,15 @@ public class WorkflowOptimizationService {
                                 : "No optimization candidates met the configured evidence thresholds.", List.of()), "deterministic")
                         : client.interpret(facts);
                 OptimizationInterpretationValidator.validate(result, facts);
+                String interpretationJson = mapper.writeValueAsString(result.interpretation());
+                if (interpretationJson.getBytes(StandardCharsets.UTF_8).length > 96000)
+                    throw new AiOutputException("Optimization interpretation exceeds the storage budget");
                 var row = new AiWorkflowOptimization();
                 row.setId(UUID.randomUUID());
                 row.setWorkflowId(workflowId);
                 row.setContextHash(hash);
                 row.setFactsJson(json);
-                row.setInterpretationJson(mapper.writeValueAsString(result.interpretation()));
+                row.setInterpretationJson(interpretationJson);
                 row.setModel(result.model());
                 // PostgreSQL timestamptz stores microseconds; initial and cached responses must agree.
                 row.setGeneratedAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));

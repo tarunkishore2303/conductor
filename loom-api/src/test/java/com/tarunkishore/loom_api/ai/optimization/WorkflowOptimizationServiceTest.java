@@ -33,6 +33,23 @@ class WorkflowOptimizationServiceTest {
     }
     @AfterEach void close() { metrics.close(); }
 
+    @Test void oversizedUtf8InterpretationIsRejectedBeforePersistence() {
+        var base = facts("dense", "CANDIDATES", true);
+        var candidates = java.util.stream.IntStream.rangeClosed(1, 20).mapToObj(i ->
+                new OptimizationCandidate("O" + i, OptimizationType.SLOW_TASK, OptimizationSeverity.WARNING,
+                        OptimizationClassification.EVIDENCE_BACKED, List.of("task"), "Recorded duration", null, "Active time only")).toList();
+        var dense = new OptimizationFacts(base.workflowId(), base.workflowVersion(), base.taskDefinitions(),
+                base.runsConsidered(), base.runIds(), base.minimumSampleSize(), base.outcome(), base.historyTruncated(),
+                base.excludedRuns(), base.historyWindowSeconds(), candidates, base.limitations(), base.evidenceFingerprint());
+        when(analyzers.analyze(any())).thenReturn(dense);
+        String multibyte = "\u6f22".repeat(1000);
+        when(client.interpret(any())).thenReturn(new WorkflowOptimizationClient.Result(
+                new WorkflowOptimizationClient.Interpretation("Review", candidates.stream().map(c ->
+                        new WorkflowOptimizationClient.Recommendation(List.of(c.candidateId()), multibyte, multibyte)).toList()), "fake"));
+        assertThatThrownBy(() -> service.generate(workflow)).isInstanceOf(AiOutputException.class).hasMessageContaining("storage budget");
+        verify(repository, never()).saveAndFlush(any());
+    }
+
     @Test void persistsFactsSeparatelyAndUsesLowCardinalityMetrics() {
         var report = service.generate(workflow);
         assertThat(report.facts()).isEqualTo(facts("first", "CANDIDATES", true));
