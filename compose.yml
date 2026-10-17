@@ -64,6 +64,8 @@ services:
     profiles: [demo]
     image: docker.io/library/python:3.13-alpine
     command: [python, /demo/task-demo-server.py]
+    environment:
+      TASK_DEMO_NOTIFICATION_STATUS: ${TASK_DEMO_NOTIFICATION_STATUS:-200}
     volumes:
       - ./scripts/task-demo-server.py:/demo/task-demo-server.py:ro
     ports:
