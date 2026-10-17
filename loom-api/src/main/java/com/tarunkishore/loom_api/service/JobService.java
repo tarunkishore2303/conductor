@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api.service;
 
+import com.loom.capability.TaskCapabilityValidators;
+import com.loom.capability.TaskConfigCodec;
 import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.*;
@@ -23,10 +25,13 @@ public class JobService {
     private final DAGValidator dagValidator;
     private final JobEventPublisher eventPublisher;
     private final MeterRegistry meterRegistry;
+    private final TaskCapabilityValidators capabilityValidators;
+    private final TaskConfigCodec taskConfigCodec;
 
     @Transactional
     public Job submit(JobSubmitRequest request) {
         dagValidator.validate(request.tasks());
+        request.tasks().forEach(task -> capabilityValidators.validate(task.type(), task.config()));
         meterRegistry.counter("loom.jobs.submitted",
             "failurePolicy", request.failurePolicy().name()).increment();
 
@@ -45,6 +50,8 @@ public class JobService {
             task.setMaxRetries(def.maxRetries());
             task.setRetryCount(0);
             task.setLogicalId(def.taskId());
+            task.setTaskType(def.type());
+            task.setTaskConfigJson(taskConfigCodec.encode(def.config()));
             job.getTasks().add(task);
             taskMap.put(def.taskId(), task);
         }

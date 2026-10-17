@@ -3,6 +3,8 @@ package com.loom.ai.config;
 import com.loom.ai.exception.AiOutputValidationException;
 import com.loom.ai.exception.AiProviderUnavailableException;
 import com.sun.net.httpserver.HttpServer;
+import com.loom.capability.TaskCapabilityCatalog;
+import com.loom.capability.TaskProperties;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 import java.net.InetSocketAddress;
@@ -34,7 +36,7 @@ class OllamaHttpTest {
         });
         server.start();
         try {
-            var model = new ModelConfiguration().workflowGenerationModel(properties(server, Duration.ofSeconds(2)));
+            var model = new ModelConfiguration().workflowGenerationModel(properties(server, Duration.ofSeconds(2)), new TaskCapabilityCatalog(TaskProperties.defaults()));
             assertThat(model.generate("Download orders").tasks()).hasSize(1);
             var request = new JsonMapper().readTree(captured.get());
             assertThat(request.get("format").isObject()).isTrue();
@@ -64,7 +66,7 @@ class OllamaHttpTest {
             });
             server.start();
             try {
-                var model = new ModelConfiguration().workflowGenerationModel(properties(server, Duration.ofMillis(200)));
+                var model = new ModelConfiguration().workflowGenerationModel(properties(server, Duration.ofMillis(200)), new TaskCapabilityCatalog(TaskProperties.defaults()));
                 long started = System.nanoTime();
                 assertThatThrownBy(() -> model.generate("Download orders")).isInstanceOf(AiProviderUnavailableException.class);
                 assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(3));
@@ -78,7 +80,7 @@ class OllamaHttpTest {
         var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         var properties = properties(server, Duration.ofMillis(200));
         server.stop(0);
-        var model = new ModelConfiguration().workflowGenerationModel(properties);
+        var model = new ModelConfiguration().workflowGenerationModel(properties, new TaskCapabilityCatalog(TaskProperties.defaults()));
         assertThatThrownBy(() -> model.generate("Download orders")).isInstanceOf(AiProviderUnavailableException.class);
     }
 

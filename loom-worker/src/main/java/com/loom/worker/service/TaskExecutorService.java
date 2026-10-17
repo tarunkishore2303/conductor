@@ -1,5 +1,7 @@
 package com.loom.worker.service;
 
+import com.loom.worker.exception.TaskExecutionException;
+
 import com.loom.common.event.TaskEvent;
 import com.loom.common.event.TaskResultEvent;
 import com.loom.common.model.*;
@@ -7,7 +9,8 @@ import com.loom.common.security.FailureEvidenceSanitizer;
 import com.loom.worker.repository.TaskExecutionJpaRepository;
 import com.loom.worker.repository.WorkerTaskRepository;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
+import com.loom.capability.TaskConfigCodec;
+import com.loom.observability.OperationMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -35,7 +38,8 @@ public class TaskExecutorService {
 
     private final WorkerTaskRepository taskRepo;
     private final TaskExecutionJpaRepository executionRepo;
-    private final TaskHandler taskHandler;
+    private final TaskHandlerRegistry handlers;
+    private final TaskConfigCodec configCodec;
     private final RedissonClient redisson;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ScheduledExecutorService retryExecutor;
@@ -110,9 +114,16 @@ public class TaskExecutorService {
         task.setRetryCount(event.attemptNumber());
         taskRepo.save(task);
 
-        Timer.Sample timerSample = Timer.start(meterRegistry);
+        var observation = OperationMetrics.startHandler(meterRegistry,
+                OperationMetrics.HandlerType.valueOf(task.getTaskType().name()));
         try {
-            taskHandler.execute(event);
+            com.loom.capability.TaskConfig config;
+            try {
+                config = configCodec.decode(task.getTaskType(), task.getTaskConfigJson());
+            } catch (IllegalArgumentException invalid) {
+                throw new TaskExecutionException("INVALID_TASK_CONFIG", "Task configuration is invalid");
+            }
+            handlers.requireHandler(task.getTaskType()).execute(new TaskExecutionContext(event, config));
 
             execution.setStatus(TaskStatus.COMPLETE);
             execution.setCompletedAt(Instant.now());
@@ -121,26 +132,24 @@ public class TaskExecutorService {
             task.setStatus(TaskStatus.COMPLETE);
             taskRepo.save(task);
 
-            timerSample.stop(meterRegistry.timer("loom.task.execution.duration",
-                "taskName", event.taskName(), "outcome", "success"));
-            meterRegistry.counter("loom.tasks.completed", "taskName", event.taskName()).increment();
+            meterRegistry.counter("loom.tasks.completed", "handler_type", task.getTaskType().name()).increment();
 
             afterCommit(() -> kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
                 new TaskResultEvent(event.jobId(), event.taskId(), executionId, TaskStatus.COMPLETE, null)));
 
         } catch (Exception ex) {
+            observation.failure();
             String safeError = FailureEvidenceSanitizer.sanitize(ex.getMessage());
             log.error("Task {} failed on attempt {}: {}", event.taskId(), event.attemptNumber(), safeError);
 
             execution.setStatus(TaskStatus.FAILED);
             execution.setCompletedAt(Instant.now());
-            execution.setErrorType(ex.getClass().getName());
+            execution.setErrorType(ex instanceof TaskExecutionException controlled
+                    ? controlled.errorType() : ex.getClass().getName());
             execution.setErrorMessage(safeError);
             executionRepo.save(execution);
 
-            timerSample.stop(meterRegistry.timer("loom.task.execution.duration",
-                "taskName", event.taskName(), "outcome", "failure"));
-            meterRegistry.counter("loom.tasks.failed", "taskName", event.taskName()).increment();
+            meterRegistry.counter("loom.tasks.failed", "handler_type", task.getTaskType().name()).increment();
 
             int nextAttempt = event.attemptNumber() + 1;
             if (nextAttempt <= event.maxRetries()) {
@@ -157,6 +166,8 @@ public class TaskExecutorService {
                     new TaskResultEvent(event.jobId(), event.taskId(), executionId,
                         TaskStatus.DEAD_LETTERED, safeError)));
             }
+        } finally {
+            observation.close();
         }
     }
 

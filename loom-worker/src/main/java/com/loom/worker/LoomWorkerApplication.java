@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EntityScan(basePackages = "com.loom.common.model")
 @EnableJpaRepositories(basePackages = "com.loom.worker.repository")
 @EnableScheduling
+@org.springframework.context.annotation.Import(com.loom.capability.CapabilityConfiguration.class)
 public class LoomWorkerApplication {
     public static void main(String[] args) {
         SpringApplication.run(LoomWorkerApplication.class, args);

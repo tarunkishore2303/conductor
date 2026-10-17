@@ -3,6 +3,7 @@ package com.tarunkishore.loom_api.service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
+import com.loom.capability.TaskCapabilityValidators;
 import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.Job;
@@ -25,10 +26,12 @@ public class WorkflowService {
     private final JobService jobService;
     private final DAGValidator dagValidator;
     private final ObjectMapper objectMapper;
+    private final TaskCapabilityValidators capabilityValidators;
 
     @Transactional
     public WorkflowTemplate createTemplate(WorkflowTemplateRequest request) {
         dagValidator.validate(request.tasks());
+        request.tasks().forEach(task -> capabilityValidators.validate(task.type(), task.config()));
 
         String dagJson;
         try {

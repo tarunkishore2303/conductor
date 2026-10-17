@@ -8,6 +8,7 @@ import com.tarunkishore.loom_api.repository.AiWorkflowProposalRepository;
 import com.tarunkishore.loom_api.repository.WorkflowTemplateRepository;
 import com.tarunkishore.loom_api.service.WorkflowService;
 import com.loom.common.dto.TaskDefinition;
+import com.loom.capability.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -57,6 +58,11 @@ class AiWorkflowProposalIT {
         AiWorkflowClient fakeClient() {
             return prompt -> {
                 if (prompt.equals("unavailable")) throw new AiUnavailableException();
+                if (prompt.equals("real")) return new AiWorkflowClient.Generation(
+                        new GeneratedWorkflow("Real", "static input", List.of(
+                                new GeneratedWorkflow.Task("wait", "Wait", "DELAY", List.of(), 0, new DelayTaskConfig(1)),
+                                new GeneratedWorkflow.Task("select", "Select", "TRANSFORM", List.of("wait"), 0,
+                                        new TransformTaskConfig("JSON_SELECT", "{\"id\":1}", List.of("id"), Map.of())))), "fake");
                 var deps = prompt.equals("cycle") ? List.of("A")
                         : (prompt.equals("missing") ? List.of("missing") : List.<String>of());
                 return new AiWorkflowClient.Generation(new GeneratedWorkflow("AI orders", "demo",
@@ -170,4 +176,42 @@ class AiWorkflowProposalIT {
         assertThat(http.postForEntity("/api/v1/workflows", manual, WorkflowTemplateResponse.class)
                 .getStatusCode().value()).isEqualTo(201);
     }
+    @Test
+    void realCapabilityPreviewApprovalAndRetrievalPreserveTypedConfig() {
+        long before = templates.count();
+        var proposal = generate("real");
+        assertThat(proposal.validation().valid()).isTrue();
+        assertThat(templates.count()).isEqualTo(before);
+        var approved = http.postForEntity("/api/v1/ai/workflows/proposals/" + proposal.proposalId() + "/approve", null, WorkflowTemplateResponse.class);
+        assertThat(approved.getStatusCode().value()).isEqualTo(201);
+        var tasks = approved.getBody().tasks();
+        assertThat(tasks).extracting(TaskDefinition::type).containsExactly(TaskType.DELAY, TaskType.TRANSFORM);
+        assertThat(tasks.getFirst().config()).isEqualTo(new DelayTaskConfig(1));
+        // Approval creates only a reusable template; executing it remains a separate jobs request.
+        assertThat(templates.count()).isEqualTo(before + 1);
+    }
+    @Test
+    void capabilityDiscoveryContainsOnlyImplementedTypes() {
+        var result = http.getForEntity("/api/v1/task-capabilities", TaskCapabilityCatalog.Capability[].class);
+        assertThat(result.getStatusCode().value()).isEqualTo(200);
+        assertThat(result.getBody()).extracting(TaskCapabilityCatalog.Capability::type)
+                .containsExactly(TaskType.NOOP, TaskType.DELAY, TaskType.HTTP_REQUEST, TaskType.TRANSFORM);
+    }
+    @Test
+    void invalidCapabilityRejectedBeforeTemplatePersistence() {
+        long before = templates.count();
+        var body = new WorkflowTemplateRequest("invalid", "invalid", List.of(
+                new TaskDefinition("wait", "Wait", List.of(), 0, TaskType.DELAY, new DelayTaskConfig(-1))), null);
+        assertThat(http.postForEntity("/api/v1/workflows", body, Map.class).getStatusCode().value()).isEqualTo(400);
+        assertThat(templates.count()).isEqualTo(before);
+    }
+    @Test
+    void unknownConfigFieldRejectedByHttpBoundary() {
+        long before = templates.count();
+        var body = Map.of("name", "unsafe", "tasks", List.of(Map.of("taskId", "a", "name", "A", "type", "DELAY",
+                "config", Map.of("durationMillis", 1, "command", "ignored-commands-are-forbidden"))));
+        assertThat(http.postForEntity("/api/v1/workflows", body, Map.class).getStatusCode().value()).isEqualTo(400);
+        assertThat(templates.count()).isEqualTo(before);
+    }
+
 }

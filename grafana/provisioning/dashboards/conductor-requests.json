@@ -10,7 +10,7 @@
              ],
     "timezone":  "browser",
     "schemaVersion":  38,
-    "version":  1,
+    "version":  2,
     "refresh":  "15s",
     "time":  {
                  "from":  "now-30m",
@@ -709,6 +709,108 @@
                                            "range":  true
                                        }
                                    ]
-                   }
-               ]
+                   },
+{
+    "id": 12,
+    "title": "Task handler requests",
+    "type": "timeseries",
+    "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+    },
+    "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 37
+    },
+    "targets": [
+        {
+            "expr": "sum by (handler_type) (rate(task_handler_requests_total[$__rate_interval]))",
+            "refId": "A",
+            "legendFormat": "{{handler_type}}"
+        }
+    ],
+    "fieldConfig": {
+        "defaults": {
+            "unit": "ops"
+        },
+        "overrides": []
+    },
+    "options": {
+        "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+        }
+    }
+},
+{
+    "id": 13,
+    "title": "Task handler failures",
+    "type": "timeseries",
+    "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+    },
+    "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 37
+    },
+    "targets": [
+        {
+            "expr": "sum by (handler_type) (rate(task_handler_failures_total[$__rate_interval])) or vector(0)",
+            "refId": "A",
+            "legendFormat": "{{handler_type}}"
+        }
+    ],
+    "fieldConfig": {
+        "defaults": {
+            "unit": "ops"
+        },
+        "overrides": []
+    },
+    "options": {
+        "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+        }
+    }
+},
+{
+    "id": 14,
+    "title": "Task handler p95 duration",
+    "type": "timeseries",
+    "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+    },
+    "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 37
+    },
+    "targets": [
+        {
+            "expr": "histogram_quantile(0.95, sum by (le, handler_type) (rate(task_handler_duration_seconds_bucket[$__rate_interval])))",
+            "refId": "A",
+            "legendFormat": "{{handler_type}}"
+        }
+    ],
+    "fieldConfig": {
+        "defaults": {
+            "unit": "s"
+        },
+        "overrides": []
+    },
+    "options": {
+        "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+        }
+    }
+}
+]
 }

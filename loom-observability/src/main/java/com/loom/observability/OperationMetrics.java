@@ -19,7 +19,8 @@ public final class OperationMetrics {
         COPILOT_STEP("copilot_step"), EXECUTION_SUMMARY("execution_summary"),
         COPILOT("copilot", "ai.copilot.requests", "ai.copilot.failures", "ai.copilot.duration"),
         SUMMARY("summary", "ai.summary.requests", "ai.summary.failures", "ai.summary.duration"),
-        INCIDENT_SEARCH("incident_search", "ai.incident.search.requests", "ai.incident.search.failures", "ai.incident.search.duration");
+        INCIDENT_SEARCH("incident_search", "ai.incident.search.requests", "ai.incident.search.failures", "ai.incident.search.duration"),
+        TASK_HANDLER("task_handler", "task.handler.requests", "task.handler.failures", "task.handler.duration");
 
         final String operation, requests, failures, duration;
         final boolean operationTag;
@@ -36,6 +37,11 @@ public final class OperationMetrics {
     }
 
     public enum Outcome { SUCCESS, FAILURE, CACHED, COALESCED }
+    public enum HandlerType { NOOP, DELAY, HTTP_REQUEST, TRANSFORM }
+
+    public static Scope startHandler(MeterRegistry registry, HandlerType handlerType) {
+        return new Scope(registry, Operation.TASK_HANDLER, null, java.util.Objects.requireNonNull(handlerType));
+    }
 
     public static Scope start(MeterRegistry registry, Operation operation) {
         return new Scope(registry, operation, null);
@@ -54,12 +60,18 @@ public final class OperationMetrics {
         private final Timer.Sample timer;
         private final String correlationId = UUID.randomUUID().toString();
         private final String model;
+        private final HandlerType handlerType;
         private Outcome outcome = Outcome.SUCCESS;
         private boolean closed;
 
         private Scope(MeterRegistry registry, Operation operation, String model) {
+            this(registry, operation, model, null);
+        }
+
+        private Scope(MeterRegistry registry, Operation operation, String model, HandlerType handlerType) {
             this.registry = registry; this.operation = operation;
             this.model = model;
+            this.handlerType = handlerType;
             timer = Timer.start(registry);
             registry.counter(operation.requests, tags()).increment();
         }
@@ -68,6 +80,7 @@ public final class OperationMetrics {
         public void failure() { outcome = Outcome.FAILURE; }
 
         private String[] tags() {
+            if (handlerType != null) return new String[] {"handler_type", handlerType.name()};
             return operation.operationTag ? new String[] {"operation", operation.operation} : new String[0];
         }
 
@@ -76,12 +89,14 @@ public final class OperationMetrics {
             closed = true;
             if (outcome == Outcome.FAILURE) registry.counter(operation.failures, tags()).increment();
             String outcomeTag = outcome.name().toLowerCase(java.util.Locale.ROOT);
-            Timer duration = operation.operationTag
+            Timer duration = handlerType != null
+                    ? registry.timer(operation.duration, "handler_type", handlerType.name(), "outcome", outcomeTag)
+                    : operation.operationTag
                     ? registry.timer(operation.duration, "operation", operation.operation, "outcome", outcomeTag)
                     : registry.timer(operation.duration, "outcome", outcomeTag);
             long elapsed = timer.stop(duration);
-            log.info("operation={} correlationId={} model={} outcome={} durationMs={}",
-                    operation.operation, correlationId, model, outcomeTag, elapsed / 1_000_000);
+            log.info("operation={} correlationId={} model={} handlerType={} outcome={} durationMs={}",
+                    operation.operation, correlationId, model, handlerType, outcomeTag, elapsed / 1_000_000);
         }
     }
 }

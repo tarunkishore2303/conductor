@@ -1,5 +1,6 @@
 package com.tarunkishore.loom_api.dto;
 
+import com.loom.capability.TaskType;
 import com.loom.common.model.Task;
 import com.loom.common.model.TaskStatus;
 
@@ -13,13 +14,14 @@ public record TaskResponse(
     int maxRetries,
     int retryCount,
     Instant createdAt,
-    Instant updatedAt
+    Instant updatedAt,
+    TaskType type
 ) {
     public static TaskResponse from(Task t) {
         return new TaskResponse(
             t.getId(), t.getName(), t.getStatus(),
             t.getMaxRetries(), t.getRetryCount(),
-            t.getCreatedAt(), t.getUpdatedAt()
+            t.getCreatedAt(), t.getUpdatedAt(), t.getTaskType()
         );
     }
 }

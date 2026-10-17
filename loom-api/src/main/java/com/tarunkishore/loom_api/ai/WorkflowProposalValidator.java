@@ -2,6 +2,8 @@ package com.tarunkishore.loom_api.ai;
 
 import com.tarunkishore.loom_api.exception.AiOutputException;
 
+import com.loom.capability.TaskCapabilityValidators;
+import com.loom.capability.TaskType;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.FailurePolicy;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
@@ -13,9 +15,11 @@ import java.util.List;
 @Component
 public class WorkflowProposalValidator {
     private final DAGValidator dagValidator;
+    private final TaskCapabilityValidators capabilities;
 
-    public WorkflowProposalValidator(DAGValidator dagValidator) {
+    public WorkflowProposalValidator(DAGValidator dagValidator, TaskCapabilityValidators capabilities) {
         this.dagValidator = dagValidator;
+        this.capabilities = capabilities;
     }
 
     public WorkflowTemplateRequest map(GeneratedWorkflow workflow) {
@@ -35,8 +39,12 @@ public class WorkflowProposalValidator {
             if (!task.identifier().matches("[A-Za-z][A-Za-z0-9_-]*")) {
                 throw new AiOutputException("Invalid task identifier");
             }
-            if (!"NOOP".equals(task.type())) {
-                throw new AiOutputException("Unsupported task type; only NOOP is available");
+            TaskType type;
+            try {
+                type = taskType(task.type());
+                capabilities.validate(type, task.config());
+            } catch (IllegalArgumentException invalid) {
+                throw new AiOutputException("Invalid task capability: " + invalid.getMessage());
             }
             if (task.dependencies() == null || task.dependencies().size() > 50) {
                 throw new AiOutputException("Dependencies must be an array of at most 50 identifiers");
@@ -45,7 +53,7 @@ public class WorkflowProposalValidator {
             if (task.maxRetries() == null || task.maxRetries() < 0 || task.maxRetries() > 5) {
                 throw new AiOutputException("maxRetries must be between 0 and 5");
             }
-            tasks.add(new TaskDefinition(task.identifier(), task.name(), task.dependencies(), task.maxRetries()));
+            tasks.add(new TaskDefinition(task.identifier(), task.name(), task.dependencies(), task.maxRetries(), type, task.config()));
         }
         return new WorkflowTemplateRequest(workflow.name(), workflow.description(), tasks, FailurePolicy.FAIL_FAST);
     }
@@ -53,6 +61,7 @@ public class WorkflowProposalValidator {
     public List<String> validate(WorkflowTemplateRequest workflow) {
         try {
             dagValidator.validate(workflow.tasks());
+            workflow.tasks().forEach(task -> capabilities.validate(task.type(), task.config()));
             return List.of();
         } catch (IllegalArgumentException e) {
             return List.of(e.getMessage());
@@ -64,4 +73,9 @@ public class WorkflowProposalValidator {
             throw new AiOutputException(label + " must contain 1 to " + max + " characters");
         }
     }
+    private static TaskType taskType(String value) {
+        try { return TaskType.valueOf(value == null ? "" : value); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("Unsupported task type"); }
+    }
+
 }

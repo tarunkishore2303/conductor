@@ -3,6 +3,8 @@ package com.loom.worker.service;
 import com.loom.common.event.TaskEvent;
 import com.loom.common.event.TaskResultEvent;
 import com.loom.common.model.*;
+import com.loom.capability.*;
+import com.loom.worker.exception.TaskExecutionException;
 import com.loom.worker.repository.TaskExecutionJpaRepository;
 import com.loom.worker.repository.WorkerTaskRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -30,6 +32,8 @@ class TaskExecutorServiceTest {
     private WorkerTaskRepository taskRepo;
     private TaskExecutionJpaRepository executionRepo;
     private TaskHandler taskHandler;
+    private TaskConfigCodec codec;
+    private java.util.concurrent.ScheduledExecutorService retries;
     private RedissonClient redisson;
     private KafkaTemplate<String, Object> kafka;
     private TransactionTemplate txTemplate;
@@ -43,6 +47,10 @@ class TaskExecutorServiceTest {
         taskRepo    = mock(WorkerTaskRepository.class);
         executionRepo = mock(TaskExecutionJpaRepository.class);
         taskHandler = mock(TaskHandler.class);
+        when(taskHandler.type()).thenReturn(TaskType.NOOP);
+        codec = mock(TaskConfigCodec.class);
+        when(codec.decode(any(), anyString())).thenReturn(new NoOpTaskConfig());
+        retries = mock(java.util.concurrent.ScheduledExecutorService.class);
         redisson    = mock(RedissonClient.class);
         kafka       = mock(KafkaTemplate.class);
         txTemplate  = mock(TransactionTemplate.class);
@@ -63,8 +71,8 @@ class TaskExecutorServiceTest {
         }).when(txTemplate).executeWithoutResult(any());
 
         service = new TaskExecutorService(
-            taskRepo, executionRepo, taskHandler, redisson, kafka,
-            Executors.newSingleThreadScheduledExecutor(),
+            taskRepo, executionRepo, new TaskHandlerRegistry(java.util.List.of(taskHandler)), codec, redisson, kafka,
+            retries,
             new SimpleMeterRegistry(), txTemplate
         );
     }
@@ -75,6 +83,40 @@ class TaskExecutorServiceTest {
         task.setMaxRetries(3);
         task.setRetryCount(0);
         return task;
+    }
+
+    @Test
+    void unavailableLockPreventsHandlerExecution() throws Exception {
+        when(taskRepo.findJobStatusByTaskId(taskId)).thenReturn(Optional.of("RUNNING"));
+        when(redisson.getLock(anyString()).tryLock(anyLong(), anyLong(), any())).thenReturn(false);
+        service.process(new TaskEvent(jobId, taskId, "ignored", 2, 0));
+        verifyNoInteractions(executionRepo);
+        verify(taskHandler, never()).execute(any());
+    }
+
+    @Test
+    void controlledHandlerFailurePersistsSafeCodeAndSchedulesRetry() throws Exception {
+        when(taskRepo.findById(taskId)).thenReturn(Optional.of(pendingTask()));
+        doThrow(new TaskExecutionException("HTTP_STATUS_500", "HTTP endpoint returned status 500"))
+                .when(taskHandler).execute(any());
+        service.process(new TaskEvent(jobId, taskId, "http", 2, 0));
+        var execution = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(execution.capture());
+        assertThat(execution.getValue().getErrorType()).isEqualTo("HTTP_STATUS_500");
+        assertThat(execution.getValue().getErrorMessage()).isEqualTo("HTTP endpoint returned status 500");
+        verify(retries).schedule(any(Runnable.class), eq(1L), eq(java.util.concurrent.TimeUnit.SECONDS));
+    }
+
+    @Test
+    void invalidStoredConfigurationIsControlledAndDoesNotReachHandler() throws Exception {
+        when(taskRepo.findById(taskId)).thenReturn(Optional.of(pendingTask()));
+        when(codec.decode(any(), anyString())).thenThrow(new IllegalArgumentException("untrusted parser diagnostics"));
+        service.process(new TaskEvent(jobId, taskId, "bad-config", 0, 0));
+        verify(taskHandler, never()).execute(any());
+        var execution = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(execution.capture());
+        assertThat(execution.getValue().getErrorType()).isEqualTo("INVALID_TASK_CONFIG");
+        assertThat(execution.getValue().getErrorMessage()).isEqualTo("Task configuration is invalid");
     }
 
     @Test

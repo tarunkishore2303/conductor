@@ -1,6 +1,8 @@
 package com.loom.ai.config;
 
 import com.loom.ai.exception.AiProviderUnavailableException;
+import com.loom.capability.TaskCapabilityCatalog;
+import com.loom.capability.TaskProperties;
 import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import static org.assertj.core.api.Assertions.*;
@@ -9,7 +11,7 @@ class ModelConfigurationTest {
     @Test
     void disabledProviderRequiresNoSecretsOrRunningOllama() throws Exception {
         var properties = new AiProperties(false, "http://localhost:11434", "qwen2.5-coder:7b", 0, Duration.ofSeconds(1), 100);
-        var model = new ModelConfiguration().workflowGenerationModel(properties);
+        var model = new ModelConfiguration().workflowGenerationModel(properties, new TaskCapabilityCatalog(TaskProperties.defaults()));
         assertThatThrownBy(() -> model.generate("prompt")).isInstanceOf(AiProviderUnavailableException.class);
         var interpretationModel = new ModelConfiguration().failureInterpretationModel(properties);
         assertThatThrownBy(() -> interpretationModel.analyze(null)).isInstanceOf(AiProviderUnavailableException.class);
