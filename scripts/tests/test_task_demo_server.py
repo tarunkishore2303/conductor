@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import threading
 import unittest
+from unittest.mock import patch
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -41,6 +42,22 @@ class TaskDemoServerTests(unittest.TestCase):
         body = json.dumps({'text': '${not_an_expression}'}).encode()
         with urlopen(Request(self.base + '/notify', data=body), timeout=2) as response:
             self.assertEqual(json.load(response), {'notified': True})
+
+    def test_notification_can_fail_only_with_explicit_demo_configuration(self):
+        with patch.object(fixture.Handler, 'notification_status', 500):
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(Request(self.base + '/notify', data=b'{}'), timeout=2)
+            self.assertEqual(caught.exception.code, 500)
+            self.assertEqual(json.load(caught.exception), {'error': 'controlled_demo_notification_failure'})
+            caught.exception.close()
+        self.assertEqual(fixture.Handler.notification_status, 200)
+
+    def test_notification_configuration_is_strict_and_defaults_to_success(self):
+        self.assertEqual(fixture.notification_status({}), 200)
+        self.assertEqual(fixture.notification_status({'TASK_DEMO_NOTIFICATION_STATUS': '500'}), 500)
+        for value in ('201', ' 500', '500 ', 'error', '', '500.0'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                fixture.notification_status({'TASK_DEMO_NOTIFICATION_STATUS': value})
 
     def test_rejects_malformed_json(self):
         with self.assertRaises(HTTPError) as caught:

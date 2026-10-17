@@ -106,7 +106,7 @@ name does not create an integration: HTTP needs an explicit URL and transform
 input is static. Parallelism is a fixed DAG, without schedules or dynamic fan-out. Human review remains
 necessary: a valid graph does not guarantee the requested business semantics.
 Authentication/tenant isolation and expired-proposal cleanup are deferred.
-Workflow optimization and frontend AI are not implemented.
+Workflow optimization is advisory and read-only. Frontend AI and automatic optimization application are not implemented.
 
 Verified on 2026-10-04: 54 unit tests and 18 Podman integration tests passed. The
 real `qwen2.5-coder:7b` model generated the six-task orders DAG with two invoice
@@ -305,6 +305,88 @@ $env:AI_SERVICE_TIMEOUT='190s'
 $env:AI_COPILOT_TIMEOUT='240s'
 .\scripts\compose.ps1 --profile ai up -d
 ```
+
+## Workflow Optimization Intelligence
+
+Workflow structure and bounded linked execution history feed deterministic Java analyzers. Java generates candidate IDs and all numeric evidence. Local Ollama (`qwen2.5-coder:7b`) adds a separately validated interpretation.
+
+```mermaid
+flowchart LR
+    History[Workflow and linked history] --> Java[Java analyzers]
+    Java --> Candidates[Optimization candidates]
+    Candidates --> Ollama[Local Ollama explanation]
+    Candidates --> Stored[Immutable advisory report]
+    Ollama --> Stored
+```
+
+**Optimization recommendations are advisory. Conductor does not automatically rewrite or execute workflows based on AI recommendations.** There is no apply endpoint, execution access or generalized dataflow. Spring discovers analyzers through IoC; duplicate types fail startup, and the immutable registry assigns snapshot-local candidate IDs.
+
+| Candidate | Evidence threshold |
+| --- | --- |
+| `SLOW_TASK` | More than 50% of aggregate eligible recorded active attempt duration; at least two task definitions each meet the minimum eligible sample count |
+| `HIGH_RETRY_RATE` | At least two executions retried, comprising at least 30% of eligible executions |
+| `FAILURE_HOTSPOT` | At least two executions contain failed attempts, comprising at least 30% of eligible executions; recovery and terminal failure counts remain separate |
+| `DLQ_HOTSPOT` | At least two executions end dead-lettered, comprising at least 30% of eligible executions |
+| `DURATION_IMBALANCE` | Siblings with identical nonempty prerequisites have at least a 3:1 aggregate active-duration ratio across paired eligible executions; zero denominators are excluded |
+| `PARALLELISM_CANDIDATE` | Siblings share prerequisites without dependency reachability between them; explicitly a `STRUCTURAL_CANDIDATE` |
+
+Retry frequency is `executions with recorded retries / eligible executions * 100`; failure frequency counts executions containing a failed attempt, and DLQ frequency counts terminal dead-lettered executions. Rate calculations require unique contiguous terminal attempt numbers starting at zero. Timing additionally requires valid start/end timestamps on every attempt. Excluded execution counts remain inspectable. Uncomputed metrics are null rather than zero; sorted run IDs retain the snapshot provenance. Recorded retries count numbered attempts greater than zero, not configured retry limits.
+
+Recorded active duration sums attempt end minus start, including retries and worker dispatch bookkeeping. It includes HTTP waiting and intentional DELAY steps; it is not CPU time. Average active attempt duration divides that sum by attempt count. Duration share uses aggregate eligible task duration, not workflow wall time or critical-path contribution. Sibling comparisons pair the same runs. Structural siblings are already eligible for concurrent DAG scheduling; graph structure does not establish business independence, safe dependency removal or a proven speedup. Every structural candidate retains that limitation.
+
+V9 adds nullable `jobs.workflow_template_id` and persisted `tasks.logical_id`. Future jobs explicitly launched from a template retain both identities before publication. Historical jobs remain unlinked; names/configuration are never used to guess identity. Direct manual jobs remain compatible and unlinked. Optimization accepts bounded safe logical identifiers; workflows with other identifiers remain executable.
+
+Context collection performs bounded bulk reads in a repeatable-read transaction. It selects linked `COMPLETE` or settled `FAILED` jobs in the history window, excludes drifted definitions and unsettled runs, and rejects attempt overflow. Failed runs may contain blocked pending tasks without attempts; running work and scheduled retries are excluded. Missing/legacy attempt numbers and invalid timestamps exclude affected executions from the relevant arithmetic. Truncation and exclusions are explicit. Model context omits URLs, bodies, task configuration and raw error messages.
+
+| API property | Default | Bound |
+| --- | --- | --- |
+| `conductor.optimization.max-runs` | `50` | `1..50` |
+| `conductor.optimization.min-sample-size` | `5` | `2..max-runs` |
+| `conductor.optimization.max-candidates` | `20` | `1..20` |
+| `conductor.optimization.history-window` | `30d` | positive, at most `365d` |
+| `conductor.optimization.max-attempts` | `1000` | `1..1000` |
+
+Compose maps these to `OPTIMIZATION_MAX_RUNS`, `OPTIMIZATION_MIN_SAMPLE_SIZE`,
+`OPTIMIZATION_MAX_CANDIDATES`, `OPTIMIZATION_HISTORY_WINDOW` and
+`OPTIMIZATION_MAX_ATTEMPTS`; see `.env.example`.
+
+V10 adds `ai_workflow_optimizations`, unique by workflow/context hash. Canonical versioned hashing sorts evidence and excludes update timestamps and request-time noise. Same-context requests reuse immutable reports; changed evidence can produce another snapshot. Requests coalesce within one API process. Database uniqueness prevents duplicate rows across instances, although two instances may both invoke Ollama before one wins persistence. Model latency holds no database transaction or execution lock.
+
+Insufficient-history and no-candidate results are persisted with model `deterministic` without invoking Ollama. Model interpretation must cite existing candidate IDs and pass bounded text/identifier validation before persistence. It cannot change facts. GET only reads storage, and same-context POST reuse works when Ollama is unavailable.
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /api/v1/ai/workflows/{workflowId}/optimization` | Collect, analyze, generate or reuse an advisory report |
+| `GET /api/v1/ai/workflows/{workflowId}/optimization` | Retrieve the latest stored report without a model call |
+
+Use the optimization section in `scripts/conductor-demo.http`: a fresh template demonstrates insufficient history; multiple settled template executions provide evidence. Prometheus exports `ai_optimization_requests_total`, `ai_optimization_failures_total` and `ai_optimization_duration_seconds`. The existing Conductor Requests Grafana dashboard includes request, failure and p95 duration panels without entity-ID or task-name tags.
+
+The optional demo fixture can change notification behavior without changing a workflow:
+
+```powershell
+$env:TASK_DEMO_NOTIFICATION_STATUS='500' # /orders stays healthy; /notify returns HTTP 500
+.\scripts\compose.ps1 --profile demo up -d --no-deps --force-recreate task-demo
+# Run the same template several times and wait for settled retry/DLQ evidence.
+$env:TASK_DEMO_NOTIFICATION_STATUS='200'
+.\scripts\compose.ps1 --profile demo up -d --no-deps --force-recreate task-demo
+# Run that same template again to collect successful executions.
+```
+
+The live six-run snapshot contained three successful and three DLQ runs. Notification
+retry/failure/DLQ rates were 50%, with six recorded retries and nine failed attempts.
+The intentional delay contributed 7,206 ms (95.08%) of eligible recorded active attempt
+time; the paired sibling ratio was 110.86:1. These are observations from that snapshot,
+not workflow latency or performance promises. Repeated POST/GET reused the report.
+With Ollama stopped, cached reports, existing analysis/search/summary reads and manual
+real workflows remained available; changed-history interpretation returned 503.
+Insufficient-history and no-candidate paths also completed without Ollama.
+
+Interpretation policy is versioned separately from the canonical evidence fingerprint.
+Known contradictory advice, such as enabling existing parallel scheduling or implementing
+existing retry behavior, and selected unsupported speedup promises fail validation with
+422 and create no new snapshot. These conservative text checks are not semantic proof:
+they can reject legitimate phrasing and cannot detect every inaccurate recommendation.
+Human review remains required; the deterministic candidate evidence is authoritative.
 
 ## Platform conventions
 
@@ -670,10 +752,10 @@ Key metrics:
 # $env:TESTCONTAINERS_RYUK_DISABLED='true' # rootless Podman; normal test cleanup still runs
 ```
 
-Real task capability verification on Java 25 / Podman passed:
+Current verification on Java 25 / Podman passed:
 
-- `./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon`: 420 unit tests, 40 API integration tests and eight worker integration tests; no failures or skips.
-- `python -m unittest discover -s scripts/tests -q`: 25 helper tests.
+- `./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon`: 490 unit tests, 43 API integration tests and eight worker integration tests; no failures or skips.
+- `python -m unittest discover -s scripts/tests -q`: 27 helper tests.
 - `git diff --check`: passed.
 
 Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka

@@ -35,6 +35,12 @@ import java.nio.charset.StandardCharsets;
 @Configuration
 public class ModelConfiguration {
     @Bean
+    com.loom.ai.model.WorkflowOptimizationModel workflowOptimizationModel(AiProperties properties) throws IOException {
+        if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };
+        return new com.loom.ai.provider.OllamaWorkflowOptimizationModel(structuredOutput(properties), prompt("workflow-optimization.txt"));
+    }
+
+    @Bean
     ExecutionSummaryModel executionSummaryModel(AiProperties properties) throws IOException {
         if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };
         return new OllamaExecutionSummaryModel(structuredOutput(properties), prompt("execution-summary.txt"));

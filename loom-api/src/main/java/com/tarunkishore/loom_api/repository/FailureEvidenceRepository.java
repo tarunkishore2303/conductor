@@ -13,4 +13,6 @@ public interface FailureEvidenceRepository extends JpaRepository<TaskExecution, 
             "select e from TaskExecution e join fetch e.task t where t.job.id=:jobId order by"
                 + " t.id,e.startedAt,e.id")
     List<TaskExecution> findForJob(@Param("jobId") UUID jobId, Pageable limit);
+    @Query("select e from TaskExecution e join fetch e.task t where t.job.id in :jobIds order by t.job.id,t.id,e.startedAt,e.id")
+    List<TaskExecution> findOptimizationAttempts(@Param("jobIds") List<UUID> jobIds, Pageable limit);
 }

@@ -30,6 +30,11 @@ public class JobService {
 
     @Transactional
     public Job submit(JobSubmitRequest request) {
+        return submit(request, null);
+    }
+
+    @Transactional
+    public Job submit(JobSubmitRequest request, UUID workflowTemplateId) {
         dagValidator.validate(request.tasks());
         request.tasks().forEach(task -> capabilityValidators.validate(task.type(), task.config()));
         meterRegistry.counter("loom.jobs.submitted",
@@ -37,6 +42,7 @@ public class JobService {
 
         Job job = new Job();
         job.setName(request.name());
+        job.setWorkflowTemplateId(workflowTemplateId);
         job.setStatus(JobStatus.CREATED);
         job.setFailurePolicy(request.failurePolicy());
 

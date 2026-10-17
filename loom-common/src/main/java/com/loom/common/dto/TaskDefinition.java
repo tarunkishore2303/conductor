@@ -7,7 +7,7 @@ import com.loom.capability.NoOpTaskConfig;
 
 /**
  * Represents one node in the submitted DAG.
- * taskId is a client-assigned logical key used only to express dependsOn relationships.
+ * taskId is a client-assigned logical key for dependency edges and persisted task-definition identity.
  */
 public record TaskDefinition(
     String taskId,

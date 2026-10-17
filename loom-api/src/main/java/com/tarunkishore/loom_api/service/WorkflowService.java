@@ -69,6 +69,6 @@ public class WorkflowService {
         WorkflowTemplate template = getTemplate(templateId);
         List<TaskDefinition> tasks = parseTasks(template);
         JobSubmitRequest request = new JobSubmitRequest(jobName, tasks, template.getDefaultFailurePolicy());
-        return jobService.submit(request);
+        return jobService.submit(request, templateId);
     }
 }

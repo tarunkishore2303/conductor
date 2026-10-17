@@ -29,7 +29,9 @@ class TaskCapabilityMigrationIT {
         String legacyJson = "[{\"taskId\":\"a\",\"name\":\"legacy-task\",\"dependsOn\":[],\"maxRetries\":2}]";
         jdbc.update("INSERT INTO workflow_templates(id,name,dag_definition_json,default_failure_policy,created_at,updated_at) VALUES(?,? ,?,'FAIL_FAST',now(),now())",template,"legacy-template",legacyJson);
         var result = Flyway.configure().dataSource(source).load().migrate();
-        assertThat(result.migrationsExecuted).isEqualTo(1);
+        assertThat(result.migrationsExecuted).isGreaterThanOrEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT workflow_template_id FROM jobs WHERE id=?",UUID.class,job)).isNull();
+        assertThat(jdbc.queryForObject("SELECT logical_id FROM tasks WHERE id=?",String.class,task)).isNull();
         assertThat(jdbc.queryForObject("SELECT task_type FROM tasks WHERE id=?",String.class,task)).isEqualTo("NOOP");
         assertThat(jdbc.queryForObject("SELECT task_config_json FROM tasks WHERE id=?",String.class,task)).isEqualTo("{}");
         String stored = jdbc.queryForObject("SELECT dag_definition_json FROM workflow_templates WHERE id=?",String.class,template);
