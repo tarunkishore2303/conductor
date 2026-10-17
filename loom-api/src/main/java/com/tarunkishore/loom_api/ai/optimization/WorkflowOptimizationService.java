@@ -21,6 +21,8 @@ import java.util.concurrent.*;
 
 @Service
 public class WorkflowOptimizationService {
+    // Increment when interpretation policy changes; preserve previously stored snapshots.
+    private static final int VERSION = 3;
     private final OptimizationContextService contexts;
     private final WorkflowOptimizationClient client;
     private final OptimizationAnalyzerRegistry analyzers;
@@ -93,7 +95,7 @@ public class WorkflowOptimizationService {
                 row.setModel(result.model());
                 // PostgreSQL timestamptz stores microseconds; initial and cached responses must agree.
                 row.setGeneratedAt(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS));
-                row.setOptimizationVersion(1);
+                row.setOptimizationVersion(VERSION);
                 Report report;
                 try {
                     report = read(repository.saveAndFlush(row));
@@ -173,7 +175,7 @@ public class WorkflowOptimizationService {
             return HexFormat.of()
                     .formatHex(
                             MessageDigest.getInstance("SHA-256")
-                                    .digest(("optimization-v1:" + json).getBytes(StandardCharsets.UTF_8)));
+                                    .digest(("optimization-v" + VERSION + ":" + json).getBytes(StandardCharsets.UTF_8)));
         } catch (java.security.NoSuchAlgorithmException failure) {
             throw new IllegalStateException("SHA-256 unavailable", failure);
         }

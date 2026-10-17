@@ -39,7 +39,10 @@ public final class OptimizationAnalyzerRegistry {
             candidates = List.copyOf(numbered);
             outcome = candidates.isEmpty() ? "NO_CANDIDATES" : "CANDIDATES";
         }
-        return new OptimizationFacts(context.workflowId(), context.workflowVersion(), context.runs().size(),
+        var definitions = context.tasks().stream().sorted(Comparator.comparing(OptimizationContext.TaskStructure::taskId))
+                .map(task -> new OptimizationContext.TaskStructure(task.taskId(), task.type(),
+                        task.dependsOn().stream().sorted().toList())).toList();
+        return new OptimizationFacts(context.workflowId(), context.workflowVersion(), definitions, context.runs().size(),
                 context.runs().stream().map(OptimizationContext.Run::jobId).sorted().toList(),
                 context.minSampleSize(), outcome, context.historyTruncated(), context.excludedRuns(),
                 context.historyWindowSeconds(), candidates, limitations.stream().sorted().toList(), fingerprint(context));

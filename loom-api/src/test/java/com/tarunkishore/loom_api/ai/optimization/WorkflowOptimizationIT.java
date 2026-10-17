@@ -87,9 +87,13 @@ class WorkflowOptimizationIT {
     String path(UUID id) { return "/api/v1/ai/workflows/"+id+"/optimization"; }
     @Test void realQueriesAggregateRetryDlqDurationAndCacheImmutableSnapshot() {
         UUID workflow=seed(6);
+        String originalDag = jdbc.queryForObject("select dag_definition_json from workflow_templates where id=?", String.class, workflow);
+        long jobsBefore = jdbc.queryForObject("select count(*) from jobs where workflow_template_id=?", Long.class, workflow);
         var response=http.postForEntity(path(workflow),null,WorkflowOptimizationService.Report.class);
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         var first=response.getBody();
+        assertThat(jdbc.queryForObject("select dag_definition_json from workflow_templates where id=?", String.class, workflow)).isEqualTo(originalDag);
+        assertThat(jdbc.queryForObject("select count(*) from jobs where workflow_template_id=?", Long.class, workflow)).isEqualTo(jobsBefore);
         assertThat(first.facts().runsConsidered()).isEqualTo(6);
         assertThat(first.facts().candidates()).extracting(OptimizationCandidate::type).contains(
                 OptimizationType.SLOW_TASK,OptimizationType.HIGH_RETRY_RATE,OptimizationType.FAILURE_HOTSPOT,

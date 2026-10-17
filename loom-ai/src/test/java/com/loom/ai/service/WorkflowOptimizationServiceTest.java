@@ -96,6 +96,14 @@ class WorkflowOptimizationServiceTest {
         service.interpret(new WorkflowOptimizationRequest(facts, WORKFLOW, List.of("O1")));
     }
 
+    @Test void contradictoryParallelismAdviceAndUnsupportedPerformancePromisesFailClosed() {
+        for (String text : List.of("Consider enabling parallel execution.", "Implement retries with backoff.",
+                "Significantly improve workflow performance.", "This will be 50% faster.")) {
+            when(model.interpret(any())).thenReturn(new OptimizationInterpretation("Review", List.of(
+                    new OptimizationInterpretation.Recommendation(List.of("O1"), text, "Recorded evidence"))));
+            assertThatThrownBy(() -> service.interpret(request())).isInstanceOf(AiOutputValidationException.class);
+        }
+    }
     @Test void unavailableAndMalformedProviderResponsesRemainControlledAndMeasured() {
         when(model.interpret(any())).thenThrow(new AiProviderUnavailableException());
         assertThatThrownBy(() -> service.interpret(request())).isInstanceOf(AiProviderUnavailableException.class);

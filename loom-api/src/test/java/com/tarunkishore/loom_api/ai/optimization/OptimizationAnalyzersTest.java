@@ -206,6 +206,20 @@ class OptimizationAnalyzersTest {
                 .isEqualTo(registry().analyze(context).runIds());
     }
 
+    @Test void taskDefinitionsPreserveTypedGraphWithSortedImmutableDependencies() {
+        var original = context(history(5, 100, 900, 0, false));
+        var definitions = List.of(new OptimizationContext.TaskStructure("join", TaskType.DELAY, List.of("b", "a")),
+                structure("b", "root"), structure("a", "root"), structure("root"));
+        var facts = registry().analyze(copy(original, definitions, original.runs()));
+        assertThat(facts.taskDefinitions()).extracting(OptimizationContext.TaskStructure::taskId)
+                .containsExactly("a", "b", "join", "root");
+        var join = facts.taskDefinitions().get(2);
+        assertThat(join.type()).isEqualTo(TaskType.DELAY);
+        assertThat(join.dependsOn()).containsExactly("a", "b");
+        assertThatThrownBy(() -> facts.taskDefinitions().clear()).isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> join.dependsOn().clear()).isInstanceOf(UnsupportedOperationException.class);
+    }
+
     private static OptimizationAnalyzerRegistry registry() {
         return new OptimizationAnalyzerRegistry(List.of(new SlowTaskAnalyzer(), new RetryHotspotAnalyzer(),
                 new FailureHotspotAnalyzer(), new DlqHotspotAnalyzer(), new DurationImbalanceAnalyzer(),

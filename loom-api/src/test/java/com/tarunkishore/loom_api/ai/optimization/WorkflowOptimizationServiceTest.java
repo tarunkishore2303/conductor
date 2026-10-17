@@ -128,7 +128,7 @@ class WorkflowOptimizationServiceTest {
     }
 
     private OptimizationFacts facts(String fingerprint, String outcome, boolean candidate) {
-        return new OptimizationFacts(workflow, 1L, candidate ? 5 : 0, List.of(), 5, outcome, false, 0, 2592000,
+        return new OptimizationFacts(workflow, 1L, List.of(), candidate ? 5 : 0, List.of(), 5, outcome, false, 0, 2592000,
                 candidate ? List.of(new OptimizationCandidate("O1", OptimizationType.SLOW_TASK, OptimizationSeverity.WARNING,
                         OptimizationClassification.EVIDENCE_BACKED, List.of("task-a"), "Recorded slow task", null, "Active time only.")) : List.of(),
                 List.of("No wall-clock inference."), fingerprint);

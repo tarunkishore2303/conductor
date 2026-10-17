@@ -10,7 +10,7 @@ class OptimizationInterpretationValidatorTest {
     private final UUID workflow = UUID.randomUUID();
     private final UUID task = UUID.randomUUID();
     private OptimizationFacts facts() {
-        return new OptimizationFacts(workflow, 1L, 5, List.of(), 5, "CANDIDATES", false, 0, 2592000,
+        return new OptimizationFacts(workflow, 1L, List.of(), 5, List.of(), 5, "CANDIDATES", false, 0, 2592000,
                 List.of(new OptimizationCandidate("O1", OptimizationType.SLOW_TASK, OptimizationSeverity.WARNING,
                         OptimizationClassification.EVIDENCE_BACKED, List.of(task.toString()), "Recorded slow task", null, "Active time only.")), List.of(), "fingerprint");
     }
@@ -19,6 +19,15 @@ class OptimizationInterpretationValidatorTest {
     }
     private WorkflowOptimizationClient.Recommendation recommendation(String id, String text) {
         return new WorkflowOptimizationClient.Recommendation(List.of(id), text, "Recorded evidence supports investigation.");
+    }
+    @Test void adviceCannotReenableExistingEngineBehaviorOrPromiseSpeedups() {
+        for (String text : List.of("Consider enabling parallel execution for these tasks.",
+                "Implement retries with exponential backoff.", "This will significantly improve performance.",
+                "This would be 50% faster.")) {
+            assertThatThrownBy(() -> OptimizationInterpretationValidator.validate(
+                    result("Review observed evidence", List.of(recommendation("O1", text))), facts()))
+                    .isInstanceOf(AiOutputException.class);
+        }
     }
     @Test void groundedCandidateAndTaskReferencesAccepted() {
         assertThatCode(() -> OptimizationInterpretationValidator.validate(result("Review " + workflow,
