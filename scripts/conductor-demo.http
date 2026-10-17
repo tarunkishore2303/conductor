@@ -346,3 +346,31 @@ POST {{baseUrl}}/api/v1/workflows/{{approveRealWorkflow.response.body.$.id}}/job
 Content-Type: application/json
 
 {"name":"AI proposed real workflow, human-approved execution"}
+
+### Optimization: analyze the real template after several separate executions
+# Repeat "Execute separately" at least five times and wait for each run to settle.
+# Only template jobs created after the identity migration contribute; old runs are not guessed.
+# @name generateOptimization
+POST {{baseUrl}}/api/v1/ai/workflows/{{createRealWorkflow.response.body.$.id}}/optimization
+
+### Read stored advisory report (works without Ollama)
+GET {{baseUrl}}/api/v1/ai/workflows/{{createRealWorkflow.response.body.$.id}}/optimization
+
+### Repeat unchanged evidence: same optimizationId/contextHash, no extra model call
+POST {{baseUrl}}/api/v1/ai/workflows/{{createRealWorkflow.response.body.$.id}}/optimization
+
+### Create a separate template with no history
+# @name createOptimizationEmptyHistory
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{
+  "name":"Optimization insufficient history example",
+  "tasks":[{"taskId":"check","name":"Check","type":"NOOP","config":{},"dependsOn":[],"maxRetries":0}]
+}
+
+### Insufficient history: deterministic persisted result without Ollama
+POST {{baseUrl}}/api/v1/ai/workflows/{{createOptimizationEmptyHistory.response.body.$.id}}/optimization
+
+### Retrieve stored insufficient-history report
+GET {{baseUrl}}/api/v1/ai/workflows/{{createOptimizationEmptyHistory.response.body.$.id}}/optimization
