@@ -37,6 +37,10 @@ public class Job {
     @Column(nullable = false)
     private Instant updatedAt;
 
+    /** Only future jobs launched explicitly from a template are linked; legacy jobs remain null. */
+    @Column(name = "workflow_template_id")
+    private UUID workflowTemplateId;
+
     @Version
     private Long version;
 

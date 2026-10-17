@@ -37,7 +37,8 @@ public class Task {
     @Column(name = "task_config_json", nullable = false, columnDefinition = "TEXT")
     private String taskConfigJson = "{}";
 
-    @Transient
+    /** Stable task-definition identity; null for historical runtime tasks. */
+    @Column(name = "logical_id", columnDefinition = "TEXT")
     private String logicalId;
 
     @Enumerated(EnumType.STRING)
