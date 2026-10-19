@@ -1,9 +1,32 @@
 package com.tarunkishore.loom_api.ai.optimization;
 
+import java.nio.charset.StandardCharsets;
+
+import com.tarunkishore.loom_api.ai.optimization.support.OptimizationContextFingerprint;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationType;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationSeverity;
+
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationOutcome;
+
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationContext;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationCandidate;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationClassification;
+import com.tarunkishore.loom_api.ai.optimization.application.OptimizationAnalyzerRegistry;
+import com.tarunkishore.loom_api.ai.optimization.analyzer.SlowTaskAnalyzer;
+import com.tarunkishore.loom_api.ai.optimization.analyzer.RetryHotspotAnalyzer;
+import com.tarunkishore.loom_api.ai.optimization.analyzer.FailureHotspotAnalyzer;
+import com.tarunkishore.loom_api.ai.optimization.analyzer.DlqHotspotAnalyzer;
+import com.tarunkishore.loom_api.ai.optimization.analyzer.DurationImbalanceAnalyzer;
+import com.tarunkishore.loom_api.ai.optimization.analyzer.ParallelExecutionObservationAnalyzer;
+import com.tarunkishore.loom_api.ai.optimization.support.OptimizationMetrics;
+import com.tarunkishore.loom_api.ai.optimization.support.OptimizationCandidateFactory;
+
 import com.loom.capability.TaskType;
 import org.junit.jupiter.api.Test;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.*;
 
@@ -24,6 +47,22 @@ class OptimizationAnalyzersTest {
 
     @Test void equalDurationsAreNotSlowTaskCandidates() {
         assertThat(new SlowTaskAnalyzer().analyze(context(history(5, 100, 100, 0, false)))).isEmpty();
+    }
+
+    @Test void sparseLongTaskCountsInDurationDenominatorButCannotBecomeAdvice() {
+        var original = context(history(20, 100, 900, 0, false));
+        var runs = new ArrayList<>(original.runs());
+        var first = runs.getFirst();
+        var tasks = new ArrayList<>(first.tasks());
+        tasks.add(task("sparse", 100_000, false, false));
+        runs.set(0, new OptimizationContext.Run(first.jobId(), first.status(), first.createdAt(), tasks));
+        var definitions = new ArrayList<>(original.tasks());
+        definitions.add(structure("sparse", "root"));
+        // A: 2,000ms / B: 18,000ms / sparse: 100,000ms. B is 15%, not 90%.
+        // Sparse has only one execution, so none of the definitions qualifies for advice.
+        assertThat(new SlowTaskAnalyzer().analyze(copy(original, definitions, runs))).isEmpty();
+        assertThat(new SlowTaskAnalyzer().analyze(original)).singleElement()
+                .satisfies(candidate -> assertThat(candidate.taskReferences()).containsExactly("b"));
     }
 
     @Test void insufficientSamplesDoNotCreateDurationAdvice() {
@@ -83,7 +122,7 @@ class OptimizationAnalyzersTest {
     @Test void duplicateAttemptNumbersAreIncomplete() {
         var task = new OptimizationContext.TaskRun(UUID.randomUUID(), "b", "COMPLETE", null,
                 List.of(attempt(0, "FAILED", 100), attempt(0, "COMPLETE", 100)));
-        assertThat(OptimizationStatistics.completeAttempts(task)).isFalse();
+        assertThat(OptimizationMetrics.completeAttempts(task)).isFalse();
     }
 
     @Test void siblingDurationComparisonUsesPairedCompleteSamples() {
@@ -102,8 +141,10 @@ class OptimizationAnalyzersTest {
     }
 
     @Test void graphCandidateAlwaysPersistsBusinessIndependenceLimitation() {
-        var candidate = new ParallelismCandidateAnalyzer().analyze(context(history(5, 100, 100, 0, false))).getFirst();
-        assertThat(candidate.classification()).isEqualTo(OptimizationClassification.STRUCTURAL_CANDIDATE);
+        var candidate = new ParallelExecutionObservationAnalyzer().analyze(context(history(5, 100, 100, 0, false))).getFirst();
+        assertThat(candidate.classification()).isEqualTo(OptimizationClassification.STRUCTURAL_OBSERVATION);
+        assertThat(candidate.type()).isEqualTo(OptimizationType.PARALLEL_EXECUTION_OBSERVATION);
+        assertThat(candidate.severity()).isEqualTo(OptimizationSeverity.INFO);
         assertThat(candidate.evidence().sharedPrerequisites()).containsExactly("root");
         assertThat(candidate.limitation()).contains("does not prove", "already", "no speedup");
     }
@@ -111,14 +152,14 @@ class OptimizationAnalyzersTest {
     @Test void directOrIndirectDependenciesDoNotCreateParallelCandidate() {
         var original = context(history(5, 100, 100, 0, false));
         var chain = copy(original, List.of(structure("root"), structure("a", "root"), structure("b", "a")), original.runs());
-        assertThat(new ParallelismCandidateAnalyzer().analyze(chain)).isEmpty();
+        assertThat(new ParallelExecutionObservationAnalyzer().analyze(chain)).isEmpty();
     }
 
     @Test void diamondJoinDoesNotBecomeSiblingOfItsParents() {
         var original = context(history(5, 100, 100, 0, false));
         var diamond = copy(original, List.of(structure("root"), structure("a", "root"),
                 structure("b", "root"), structure("join", "a", "b")), original.runs());
-        assertThat(new ParallelismCandidateAnalyzer().analyze(diamond)).singleElement()
+        assertThat(new ParallelExecutionObservationAnalyzer().analyze(diamond)).singleElement()
                 .satisfies(candidate -> assertThat(candidate.taskReferences()).containsExactly("a", "b"));
     }
 
@@ -126,7 +167,7 @@ class OptimizationAnalyzersTest {
         var task = new OptimizationContext.TaskRun(UUID.randomUUID(), "b", "FAILED", null,
                 List.of(new OptimizationContext.Attempt(0, "FAILED", START, START.plusMillis(10),
                         "Bearer secret-text", null)));
-        assertThat(OptimizationStatistics.evidence(List.of(task), 0, 100.0, 10L, 0.0, null, null, List.of())
+        assertThat(OptimizationCandidateFactory.evidence(List.of(task), 0, 100.0, 10L, 0.0, null, null, List.of())
                 .errorTypeCounts()).containsOnlyKeys("OTHER");
     }
 
@@ -139,7 +180,7 @@ class OptimizationAnalyzersTest {
             assertThat(evidence.averageActiveAttemptMillis()).isNull();
             assertThat(evidence.shareOfRecordedActiveTimePercent()).isNull();
         }
-        var structural = new ParallelismCandidateAnalyzer().analyze(context).getFirst().evidence();
+        var structural = new ParallelExecutionObservationAnalyzer().analyze(context).getFirst().evidence();
         assertThat(structural.ratePercent()).isNull();
         assertThat(structural.activeAttemptMillis()).isNull();
         assertThat(structural.averageActiveAttemptMillis()).isNull();
@@ -152,7 +193,7 @@ class OptimizationAnalyzersTest {
 
     @Test void genuinelyComputedZeroDurationRemainsZero() {
         var task = task("a", 0, false, false);
-        var evidence = OptimizationStatistics.evidence(List.of(task), 0, 0.0, 0L, 0.0, null, null, List.of());
+        var evidence = OptimizationCandidateFactory.evidence(List.of(task), 0, 0.0, 0L, 0.0, null, null, List.of());
         assertThat(evidence.ratePercent()).isZero();
         assertThat(evidence.activeAttemptMillis()).isZero();
         assertThat(evidence.averageActiveAttemptMillis()).isZero();
@@ -160,7 +201,7 @@ class OptimizationAnalyzersTest {
     }
 
     @Test void registryRejectsDuplicateAnalyzerTypes() {
-        assertThatThrownBy(() -> new OptimizationAnalyzerRegistry(List.of(new SlowTaskAnalyzer(), new SlowTaskAnalyzer())))
+        assertThatThrownBy(() -> new OptimizationAnalyzerRegistry(List.of(new SlowTaskAnalyzer(), new SlowTaskAnalyzer()), new OptimizationContextFingerprint()))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("Duplicate");
     }
 
@@ -175,10 +216,10 @@ class OptimizationAnalyzersTest {
     }
 
     @Test void registryHasDeterministicInsufficientAndNoCandidatePaths() {
-        assertThat(registry().analyze(context(history(4, 100, 100, 0, false))).outcome()).isEqualTo("INSUFFICIENT_HISTORY");
+        assertThat(registry().analyze(context(history(4, 100, 100, 0, false))).outcome()).isEqualTo(OptimizationOutcome.INSUFFICIENT_HISTORY);
         var original = context(history(5, 100, 100, 0, false));
         var chain = copy(original, List.of(structure("root"), structure("a", "root"), structure("b", "a")), original.runs());
-        assertThat(registry().analyze(chain).outcome()).isEqualTo("NO_CANDIDATES");
+        assertThat(registry().analyze(chain).outcome()).isEqualTo(OptimizationOutcome.NO_CANDIDATES);
     }
 
     @Test void contextOrderingDoesNotChangeFingerprintOrCandidateIds() {
@@ -223,7 +264,7 @@ class OptimizationAnalyzersTest {
     private static OptimizationAnalyzerRegistry registry() {
         return new OptimizationAnalyzerRegistry(List.of(new SlowTaskAnalyzer(), new RetryHotspotAnalyzer(),
                 new FailureHotspotAnalyzer(), new DlqHotspotAnalyzer(), new DurationImbalanceAnalyzer(),
-                new ParallelismCandidateAnalyzer()));
+                new ParallelExecutionObservationAnalyzer()), new OptimizationContextFingerprint());
     }
 
     private static OptimizationContext context(List<OptimizationContext.Run> runs) {
@@ -245,7 +286,7 @@ class OptimizationAnalyzersTest {
 
     private static List<OptimizationContext.Run> history(int count, long aMillis, long bMillis, int retryRuns, boolean dlq) {
         return IntStream.range(0, count).mapToObj(index -> new OptimizationContext.Run(
-                UUID.nameUUIDFromBytes(("run" + index).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                UUID.nameUUIDFromBytes(("run" + index).getBytes(StandardCharsets.UTF_8)),
                 index < retryRuns && dlq ? "FAILED" : "COMPLETE", START.plusSeconds(index),
                 List.of(task("a", aMillis, false, false), task("b", bMillis, index < retryRuns, dlq)))).toList();
     }
@@ -254,7 +295,7 @@ class OptimizationAnalyzersTest {
         List<OptimizationContext.Attempt> attempts = retries
                 ? List.of(attempt(0, "FAILED", millis), attempt(1, "FAILED", millis), attempt(2, dlq ? "FAILED" : "COMPLETE", millis))
                 : List.of(attempt(0, "COMPLETE", millis));
-        return new OptimizationContext.TaskRun(UUID.nameUUIDFromBytes((id + millis + retries).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+        return new OptimizationContext.TaskRun(UUID.nameUUIDFromBytes((id + millis + retries).getBytes(StandardCharsets.UTF_8)),
                 id, retries && dlq ? "DEAD_LETTERED" : "COMPLETE", retries && dlq ? START.plusSeconds(10) : null, attempts);
     }
 

@@ -1,15 +1,31 @@
 package com.tarunkishore.loom_api.ai.optimization;
 
+import com.tarunkishore.loom_api.ai.optimization.application.OptimizationContextService;
+import com.tarunkishore.loom_api.ai.optimization.config.OptimizationProperties;
+
 import com.loom.capability.*;
 import com.loom.common.dto.TaskDefinition;
-import com.loom.common.model.*;
+import com.loom.common.model.Job;
+import com.loom.common.model.JobStatus;
+import com.loom.common.model.Task;
+import com.loom.common.model.TaskExecution;
+import com.loom.common.model.TaskStatus;
+import com.loom.common.model.WorkflowTemplate;
 import com.tarunkishore.loom_api.exception.AiOutputException;
-import com.tarunkishore.loom_api.repository.*;
+import com.tarunkishore.loom_api.repository.WorkflowTemplateRepository;
+import com.tarunkishore.loom_api.repository.JobRepository;
+import com.tarunkishore.loom_api.repository.TaskRepository;
+import com.tarunkishore.loom_api.repository.FailureEvidenceRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import java.time.Instant;
-import java.util.*;
+import java.util.Collections;
+import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.Optional;
+import java.util.UUID;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -18,7 +34,7 @@ class OptimizationContextServiceTest {
     final JobRepository jobs = mock(JobRepository.class);
     final TaskRepository tasks = mock(TaskRepository.class);
     final FailureEvidenceRepository evidence = mock(FailureEvidenceRepository.class);
-    final tools.jackson.databind.ObjectMapper mapper = JsonMapper.builder().build();
+    final ObjectMapper mapper = JsonMapper.builder().build();
     final TaskProperties taskProperties = TaskProperties.defaults();
     final TaskConfigCodec codec = new TaskConfigCodec(new TaskCapabilityValidators(List.of(
             new NoOpTaskConfigValidator(),new DelayTaskConfigValidator(taskProperties),

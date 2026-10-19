@@ -1,4 +1,4 @@
-package com.tarunkishore.loom_api.ai.optimization;
+package com.tarunkishore.loom_api.ai.optimization.config;
 
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;

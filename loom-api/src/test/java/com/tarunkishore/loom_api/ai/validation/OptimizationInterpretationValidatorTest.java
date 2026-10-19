@@ -1,6 +1,14 @@
 package com.tarunkishore.loom_api.ai.validation;
 
-import com.tarunkishore.loom_api.ai.optimization.*;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationOutcome;
+
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationFacts;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationCandidate;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationType;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationSeverity;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationClassification;
+import com.tarunkishore.loom_api.ai.optimization.client.WorkflowOptimizationClient;
+
 import com.tarunkishore.loom_api.exception.AiOutputException;
 import org.junit.jupiter.api.Test;
 import java.util.*;
@@ -10,7 +18,7 @@ class OptimizationInterpretationValidatorTest {
     private final UUID workflow = UUID.randomUUID();
     private final UUID task = UUID.randomUUID();
     private OptimizationFacts facts() {
-        return new OptimizationFacts(workflow, 1L, List.of(), 5, List.of(), 5, "CANDIDATES", false, 0, 2592000,
+        return new OptimizationFacts(workflow, 1L, List.of(), 5, List.of(), 5, OptimizationOutcome.CANDIDATES, false, 0, 2592000,
                 List.of(new OptimizationCandidate("O1", OptimizationType.SLOW_TASK, OptimizationSeverity.WARNING,
                         OptimizationClassification.EVIDENCE_BACKED, List.of(task.toString()), "Recorded slow task", null, "Active time only.")), List.of(), "fingerprint");
     }

@@ -1,5 +1,7 @@
 package com.tarunkishore.loom_api;
 
+import com.loom.common.model.Task;
+
 import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.FailurePolicy;
@@ -193,7 +195,7 @@ class JobSubmissionIT {
         assertThat(jobResp.getBody().tasks()).hasSize(3);
         var persisted = jobRepository.findByIdWithTasks(jobResp.getBody().id()).orElseThrow();
         assertThat(persisted.getWorkflowTemplateId()).isEqualTo(templateId);
-        assertThat(persisted.getTasks()).extracting(com.loom.common.model.Task::getLogicalId)
+        assertThat(persisted.getTasks()).extracting(Task::getLogicalId)
                 .containsExactlyInAnyOrder("extract", "transform", "load");
     }
 

@@ -1,10 +1,13 @@
 package com.tarunkishore.loom_api.ai;
 
-import com.tarunkishore.loom_api.ai.optimization.*;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationCandidate;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationFacts;
+import com.tarunkishore.loom_api.ai.optimization.client.WorkflowOptimizationClient;
 import com.tarunkishore.loom_api.config.AiServiceProperties;
 import com.tarunkishore.loom_api.exception.AiOutputException;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -19,7 +22,7 @@ public class HttpWorkflowOptimizationClient implements WorkflowOptimizationClien
     }
     public Result interpret(OptimizationFacts facts) {
         String json = mapper.writeValueAsString(facts);
-        if (json.length() > 24000) throw new AiOutputException("Optimization evidence exceeds the context budget");
+        if (json.getBytes(StandardCharsets.UTF_8).length > 24000) throw new AiOutputException("Optimization evidence exceeds the context budget");
         return client.post(new Request(json, facts.workflowId(), facts.candidates().stream()
                 .map(OptimizationCandidate::candidateId).toList()), Result.class);
     }

@@ -1,14 +1,19 @@
 package com.tarunkishore.loom_api.ai.validation;
 
-import com.tarunkishore.loom_api.ai.optimization.*;
+import com.tarunkishore.loom_api.ai.optimization.client.WorkflowOptimizationClient;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationContext;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationFacts;
 import com.tarunkishore.loom_api.exception.AiOutputException;
-import java.util.*;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /** Transport/model output is untrusted; only application-generated candidates may be cited. */
 public final class OptimizationInterpretationValidator {
     private static final Pattern UUID_TEXT = Pattern.compile("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\b");
-    // Existing engine behavior is an application fact, not a model recommendation.
+    // Secondary fail-closed lexical guard only; schema, grounded citations and bounded evidence
+    // are primary. These phrases cannot prove prose correctness and may reject negations.
     private static final Pattern CONTRADICTORY_ADVICE = Pattern.compile(
             "(?is)\\b(?:enabl\\w*|introduc\\w*|implement\\w*|add\\w*)\\b.{0,80}\\b(?:parallel|concurrent)\\w*"
             + "|\\bimplement\\w*\\b.{0,60}\\b(?:retr(?:y|ies)|backoff)\\b"

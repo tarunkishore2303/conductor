@@ -1,5 +1,21 @@
 package com.tarunkishore.loom_api.ai.optimization;
 
+import com.tarunkishore.loom_api.ai.optimization.application.OptimizationAnalyzerRegistry;
+import com.tarunkishore.loom_api.ai.optimization.application.OptimizationContextService;
+import com.tarunkishore.loom_api.ai.optimization.application.OptimizationRequestCoalescer;
+import com.tarunkishore.loom_api.ai.optimization.application.WorkflowOptimizationService;
+import com.tarunkishore.loom_api.ai.optimization.client.WorkflowOptimizationClient;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationCandidate;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationClassification;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationFacts;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationOutcome;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationSeverity;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationType;
+import com.tarunkishore.loom_api.ai.optimization.persistence.AiWorkflowOptimization;
+import com.tarunkishore.loom_api.ai.optimization.persistence.OptimizationReportStore;
+import com.tarunkishore.loom_api.ai.optimization.support.OptimizationContextFingerprint;
+import java.util.stream.IntStream;
+
 import com.tarunkishore.loom_api.exception.*;
 import com.tarunkishore.loom_api.repository.AiWorkflowOptimizationRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -19,7 +35,7 @@ class WorkflowOptimizationServiceTest {
     private final WorkflowOptimizationClient client = mock(WorkflowOptimizationClient.class);
     private final AiWorkflowOptimizationRepository repository = mock(AiWorkflowOptimizationRepository.class);
     private final SimpleMeterRegistry metrics = new SimpleMeterRegistry();
-    private final WorkflowOptimizationService service = new WorkflowOptimizationService(contexts, analyzers, client, repository, JsonMapper.builder().build(), metrics);
+    private final WorkflowOptimizationService service = new WorkflowOptimizationService(contexts, analyzers, client, new OptimizationReportStore(repository, JsonMapper.builder().build(), new OptimizationContextFingerprint()), new OptimizationRequestCoalescer(), metrics);
     private final UUID workflow = UUID.randomUUID();
     private final WorkflowOptimizationClient.Result result = new WorkflowOptimizationClient.Result(
             new WorkflowOptimizationClient.Interpretation("Review recorded candidate evidence.", List.of(
@@ -35,7 +51,7 @@ class WorkflowOptimizationServiceTest {
 
     @Test void oversizedUtf8InterpretationIsRejectedBeforePersistence() {
         var base = facts("dense", "CANDIDATES", true);
-        var candidates = java.util.stream.IntStream.rangeClosed(1, 20).mapToObj(i ->
+        var candidates = IntStream.rangeClosed(1, 20).mapToObj(i ->
                 new OptimizationCandidate("O" + i, OptimizationType.SLOW_TASK, OptimizationSeverity.WARNING,
                         OptimizationClassification.EVIDENCE_BACKED, List.of("task"), "Recorded duration", null, "Active time only")).toList();
         var dense = new OptimizationFacts(base.workflowId(), base.workflowVersion(), base.taskDefinitions(),
@@ -59,6 +75,49 @@ class WorkflowOptimizationServiceTest {
         assertThat(saved.getValue().getInterpretationJson()).contains("Investigate observed duration");
         metrics.getMeters().forEach(meter -> meter.getId().getTags().forEach(tag ->
                 assertThat(tag.getKey()).isIn("outcome")));
+    }
+
+    @Test void multibyteFactsUseByteBudgetBeforeModelOrStorage() {
+        var original = facts("dense-facts", "CANDIDATES", true);
+        var dense = new OptimizationFacts(original.workflowId(), original.workflowVersion(), original.taskDefinitions(),
+                original.runsConsidered(), original.runIds(), original.minimumSampleSize(), original.outcome(),
+                original.historyTruncated(), original.excludedRuns(), original.historyWindowSeconds(),
+                original.candidates(), List.of("\u6f22".repeat(9000)), original.evidenceFingerprint());
+        when(analyzers.analyze(any())).thenReturn(dense);
+        assertThatThrownBy(() -> service.generate(workflow)).isInstanceOf(AiOutputException.class)
+                .hasMessageContaining("allowed size");
+        verifyNoInteractions(client);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test void legacySnapshotRemainsReadableWithoutRewritingStoredJson() {
+        service.generate(workflow);
+        var saved = ArgumentCaptor.forClass(AiWorkflowOptimization.class);
+        verify(repository).saveAndFlush(saved.capture());
+        var row = saved.getValue();
+        String legacy = row.getFactsJson().replace("SLOW_TASK", "PARALLELISM_CANDIDATE")
+                .replace("EVIDENCE_BACKED", "STRUCTURAL_CANDIDATE");
+        row.setFactsJson(legacy);
+        row.setOptimizationVersion(3);
+        when(repository.findFirstByWorkflowIdOrderByGeneratedAtDescIdDesc(workflow)).thenReturn(Optional.of(row));
+        clearInvocations(client, repository);
+        var report = service.get(workflow);
+        assertThat(report.optimizationVersion()).isEqualTo(3);
+        assertThat(report.facts().candidates().getFirst().type())
+                .isEqualTo(OptimizationType.PARALLEL_EXECUTION_OBSERVATION);
+        assertThat(report.facts().candidates().getFirst().classification())
+                .isEqualTo(OptimizationClassification.STRUCTURAL_OBSERVATION);
+        assertThat(row.getFactsJson()).isEqualTo(legacy);
+        verifyNoInteractions(client);
+        verify(repository, never()).saveAndFlush(any());
+    }
+
+    @Test void failedLeaderReleasesCoalescingSlotForNextRequest() {
+        when(client.interpret(any())).thenThrow(new AiUnavailableException()).thenReturn(result);
+        assertThatThrownBy(() -> service.generate(workflow)).isInstanceOf(AiUnavailableException.class);
+        assertThat(service.generate(workflow).model()).isEqualTo("fake");
+        verify(client, times(2)).interpret(any());
+        verify(repository, times(1)).saveAndFlush(any());
     }
 
     @Test void identicalSnapshotReusesCacheDuringProviderOutage() {
@@ -145,7 +204,7 @@ class WorkflowOptimizationServiceTest {
     }
 
     private OptimizationFacts facts(String fingerprint, String outcome, boolean candidate) {
-        return new OptimizationFacts(workflow, 1L, List.of(), candidate ? 5 : 0, List.of(), 5, outcome, false, 0, 2592000,
+        return new OptimizationFacts(workflow, 1L, List.of(), candidate ? 5 : 0, List.of(), 5, OptimizationOutcome.valueOf(outcome), false, 0, 2592000,
                 candidate ? List.of(new OptimizationCandidate("O1", OptimizationType.SLOW_TASK, OptimizationSeverity.WARNING,
                         OptimizationClassification.EVIDENCE_BACKED, List.of("task-a"), "Recorded slow task", null, "Active time only.")) : List.of(),
                 List.of("No wall-clock inference."), fingerprint);

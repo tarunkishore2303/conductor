@@ -1,11 +1,21 @@
 package com.tarunkishore.loom_api.ai.optimization;
 
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationOutcome;
+
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationFacts;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationCandidate;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationType;
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationReport;
+import com.tarunkishore.loom_api.ai.optimization.application.OptimizationContextService;
+import com.tarunkishore.loom_api.ai.optimization.client.WorkflowOptimizationClient;
+
 import static org.assertj.core.api.Assertions.*;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.capability.*;
 import com.tarunkishore.loom_api.exception.AiUnavailableException;
 import com.tarunkishore.loom_api.repository.AiWorkflowOptimizationRepository;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
@@ -17,7 +27,8 @@ import org.testcontainers.junit.jupiter.*;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 import tools.jackson.databind.ObjectMapper;
-import java.util.*;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -89,7 +100,7 @@ class WorkflowOptimizationIT {
         UUID workflow=seed(6);
         String originalDag = jdbc.queryForObject("select dag_definition_json from workflow_templates where id=?", String.class, workflow);
         long jobsBefore = jdbc.queryForObject("select count(*) from jobs where workflow_template_id=?", Long.class, workflow);
-        var response=http.postForEntity(path(workflow),null,WorkflowOptimizationService.Report.class);
+        var response=http.postForEntity(path(workflow),null,OptimizationReport.class);
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         var first=response.getBody();
         assertThat(jdbc.queryForObject("select dag_definition_json from workflow_templates where id=?", String.class, workflow)).isEqualTo(originalDag);
@@ -97,34 +108,34 @@ class WorkflowOptimizationIT {
         assertThat(first.facts().runsConsidered()).isEqualTo(6);
         assertThat(first.facts().candidates()).extracting(OptimizationCandidate::type).contains(
                 OptimizationType.SLOW_TASK,OptimizationType.HIGH_RETRY_RATE,OptimizationType.FAILURE_HOTSPOT,
-                OptimizationType.DLQ_HOTSPOT,OptimizationType.DURATION_IMBALANCE,OptimizationType.PARALLELISM_CANDIDATE);
+                OptimizationType.DLQ_HOTSPOT,OptimizationType.DURATION_IMBALANCE,OptimizationType.PARALLEL_EXECUTION_OBSERVATION);
         var retry=first.facts().candidates().stream().filter(c->c.type()==OptimizationType.HIGH_RETRY_RATE).findFirst().orElseThrow().evidence();
         assertThat(retry.recordedRetries()).isEqualTo(6); assertThat(retry.ratePercent()).isEqualTo(50.0);
         assertThat(client.calls.get()).isEqualTo(1);
         client.unavailable=true;
-        assertThat(http.postForObject(path(workflow),null,WorkflowOptimizationService.Report.class)).isEqualTo(first);
-        assertThat(http.getForObject(path(workflow),WorkflowOptimizationService.Report.class)).isEqualTo(first);
+        assertThat(http.postForObject(path(workflow),null,OptimizationReport.class)).isEqualTo(first);
+        assertThat(http.getForObject(path(workflow),OptimizationReport.class)).isEqualTo(first);
         assertThat(reports.findAll().stream().filter(r->r.getWorkflowId().equals(workflow))).hasSize(1);
         addRun(workflow,6);
         assertThat(http.postForEntity(path(workflow),null,String.class).getStatusCode().value()).isEqualTo(503);
         client.unavailable=false;
-        var next=http.postForObject(path(workflow),null,WorkflowOptimizationService.Report.class);
+        var next=http.postForObject(path(workflow),null,OptimizationReport.class);
         assertThat(next.contextHash()).isNotEqualTo(first.contextHash());
         assertThat(next.optimizationId()).isNotEqualTo(first.optimizationId());
     }
     @Test void insufficientLinkedHistoryBypassesProviderAndUnknownWorkflowIs404() {
         UUID workflow=seed(2); client.unavailable=true;
-        var report=http.postForObject(path(workflow),null,WorkflowOptimizationService.Report.class);
-        assertThat(report.facts().outcome()).isEqualTo("INSUFFICIENT_HISTORY");
+        var report=http.postForObject(path(workflow),null,OptimizationReport.class);
+        assertThat(report.facts().outcome()).isEqualTo(OptimizationOutcome.INSUFFICIENT_HISTORY);
         assertThat(report.model()).isEqualTo("deterministic"); assertThat(client.calls.get()).isZero();
         assertThat(http.postForEntity(path(UUID.randomUUID()),null,String.class).getStatusCode().value()).isEqualTo(404);
     }
     @Test void updatedAtNoiseDoesNotChangeEvidenceAndUnlinkedHistoryIsExcluded() {
         UUID workflow=seed(6);
-        var first=http.postForObject(path(workflow),null,WorkflowOptimizationService.Report.class);
+        var first=http.postForObject(path(workflow),null,OptimizationReport.class);
         jdbc.update("update jobs set updated_at=now()+interval '1 hour' where workflow_template_id=?",workflow);
         jdbc.update("update tasks set updated_at=now()+interval '1 hour' where job_id in(select id from jobs where workflow_template_id=?)",workflow);
-        assertThat(http.postForObject(path(workflow),null,WorkflowOptimizationService.Report.class).optimizationId()).isEqualTo(first.optimizationId());
+        assertThat(http.postForObject(path(workflow),null,OptimizationReport.class).optimizationId()).isEqualTo(first.optimizationId());
         jdbc.update("update jobs set workflow_template_id=null where workflow_template_id=?",workflow);
         assertThat(contexts.collect(workflow).runs()).isEmpty();
     }

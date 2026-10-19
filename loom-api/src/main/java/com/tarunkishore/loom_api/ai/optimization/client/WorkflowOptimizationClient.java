@@ -1,5 +1,6 @@
-package com.tarunkishore.loom_api.ai.optimization;
+package com.tarunkishore.loom_api.ai.optimization.client;
 
+import com.tarunkishore.loom_api.ai.optimization.domain.OptimizationFacts;
 import java.util.List;
 
 public interface WorkflowOptimizationClient {
