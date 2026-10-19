@@ -1,6 +1,8 @@
 package com.loom.ai.provider;
 
-import com.loom.ai.model.*;
+import com.loom.ai.model.OptimizationInterpretation;
+import com.loom.ai.model.WorkflowOptimizationModel;
+import com.loom.ai.model.WorkflowOptimizationRequest;
 import tools.jackson.databind.json.JsonMapper;
 
 public final class OllamaWorkflowOptimizationModel implements WorkflowOptimizationModel {

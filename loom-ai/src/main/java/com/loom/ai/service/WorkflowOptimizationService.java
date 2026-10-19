@@ -2,17 +2,24 @@ package com.loom.ai.service;
 
 import com.loom.ai.config.AiProperties;
 import com.loom.ai.exception.AiInvalidRequestException;
-import com.loom.ai.model.*;
+import com.loom.ai.model.OptimizationInterpretation;
+import com.loom.ai.model.WorkflowOptimizationModel;
+import com.loom.ai.model.WorkflowOptimizationRequest;
 import com.loom.ai.validation.OptimizationInterpretationValidator;
 import com.loom.observability.OperationMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.validation.Validator;
-import tools.jackson.databind.*;
-import tools.jackson.databind.json.JsonMapper;
-import java.util.*;
+import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.regex.Pattern;
+import org.springframework.stereotype.Service;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
-@org.springframework.stereotype.Service
+@Service
 public class WorkflowOptimizationService {
     private static final Pattern UUID_TEXT = Pattern.compile("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
     private final WorkflowOptimizationModel model;
@@ -28,6 +35,7 @@ public class WorkflowOptimizationService {
 
     public OptimizationInterpretation interpret(WorkflowOptimizationRequest request) {
         if (request == null || !validator.validate(request).isEmpty()) invalid();
+        if (request.factsJson().getBytes(StandardCharsets.UTF_8).length > 24000) invalid();
         JsonNode facts;
         try { facts = json.readTree(request.factsJson()); }
         catch (RuntimeException malformed) { throw new AiInvalidRequestException("Optimization facts must be valid JSON."); }
@@ -42,7 +50,7 @@ public class WorkflowOptimizationService {
         if (new HashSet<>(request.candidateIds()).size() != request.candidateIds().size()
                 || !candidates.equals(new HashSet<>(request.candidateIds()))) invalid();
         String sanitized = json.writeValueAsString(sanitize(facts));
-        if (sanitized.length() > 24000) invalid();
+        if (sanitized.getBytes(StandardCharsets.UTF_8).length > 24000) invalid();
         var identifiers = new HashSet<String>();
         var matcher = UUID_TEXT.matcher(sanitized);
         while (matcher.find()) identifiers.add(matcher.group().toLowerCase(Locale.ROOT));

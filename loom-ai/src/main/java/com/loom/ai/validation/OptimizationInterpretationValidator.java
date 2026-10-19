@@ -2,12 +2,16 @@ package com.loom.ai.validation;
 
 import com.loom.ai.exception.AiOutputValidationException;
 import com.loom.ai.model.OptimizationInterpretation;
-import java.util.*;
+import java.util.HashSet;
+import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /** Interpretation may cite only application-owned candidates and supplied execution identifiers. */
 public final class OptimizationInterpretationValidator {
     private static final Pattern UUID_TEXT = Pattern.compile("(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+    // Secondary fail-closed lexical safeguard only; schema, citation grounding and bounded
+    // evidence remain authoritative. These phrases cannot establish semantic correctness.
     // Existing engine behavior is an application fact, not a model recommendation.
     private static final Pattern CONTRADICTORY_ADVICE = Pattern.compile(
             "(?is)\\b(?:enabl\\w*|introduc\\w*|implement\\w*|add\\w*)\\b.{0,80}\\b(?:parallel|concurrent)\\w*"
