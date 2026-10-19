@@ -1,9 +1,19 @@
 """Fixed HTTP fixture for Conductor demos; never executes task/user-supplied code."""
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+def notification_status(environ):
+    value = environ.get('TASK_DEMO_NOTIFICATION_STATUS', '200')
+    if value not in ('200', '500'):
+        raise ValueError('TASK_DEMO_NOTIFICATION_STATUS must be 200 or 500')
+    return int(value)
+
+
 class Handler(BaseHTTPRequestHandler):
+    notification_status = 200
+
     def do_GET(self):
         if self.path in ('/health', '/orders'):
             self.respond(200, {'status': 'READY', 'orders': [42]})
@@ -25,7 +35,10 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             self.respond(400, {'error': 'invalid_json'})
             return
-        self.respond(200, {'notified': True})
+        if self.notification_status == 500:
+            self.respond(500, {'error': 'controlled_demo_notification_failure'})
+        else:
+            self.respond(200, {'notified': True})
 
     def respond(self, status, value):
         body = json.dumps(value).encode()
@@ -40,4 +53,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    Handler.notification_status = notification_status(os.environ)
     ThreadingHTTPServer(('0.0.0.0', 8080), Handler).serve_forever()

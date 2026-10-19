@@ -1,39 +1,47 @@
 package com.loom.ai.config;
 
-import com.loom.ai.model.FailureInterpretationModel;
-import com.loom.ai.model.ExecutionSummaryModel;
-import com.loom.ai.provider.OllamaExecutionSummaryModel;
+import com.loom.ai.exception.AiProviderUnavailableException;
 import com.loom.ai.model.CopilotModel;
-import com.loom.ai.provider.OllamaCopilotModel;
+import com.loom.ai.model.ExecutionSummaryModel;
+import com.loom.ai.model.FailureInterpretationModel;
 import com.loom.ai.model.IncidentEmbeddingModel;
 import com.loom.ai.model.IncidentSynthesisModel;
+import com.loom.ai.model.WorkflowGenerationModel;
+import com.loom.ai.model.WorkflowOptimizationModel;
+import com.loom.ai.provider.OllamaCopilotModel;
+import com.loom.ai.provider.OllamaExecutionSummaryModel;
+import com.loom.ai.provider.OllamaFailureInterpretationModel;
 import com.loom.ai.provider.OllamaIncidentEmbeddingModel;
 import com.loom.ai.provider.OllamaIncidentSynthesisModel;
-import com.loom.ai.model.WorkflowGenerationModel;
-import com.loom.capability.TaskCapabilityCatalog;
-import tools.jackson.databind.json.JsonMapper;
-import com.loom.ai.provider.OllamaFailureInterpretationModel;
 import com.loom.ai.provider.OllamaStructuredOutput;
 import com.loom.ai.provider.OllamaWorkflowGenerationModel;
-import com.loom.ai.exception.AiProviderUnavailableException;
+import com.loom.ai.provider.OllamaWorkflowOptimizationModel;
+import com.loom.capability.TaskCapabilityCatalog;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import org.springframework.ai.ollama.OllamaChatModel;
 import org.springframework.ai.ollama.OllamaEmbeddingModel;
-import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
+import org.springframework.ai.ollama.api.OllamaEmbeddingOptions;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import tools.jackson.databind.json.JsonMapper;
 
 @Configuration
 public class ModelConfiguration {
+    @Bean
+    WorkflowOptimizationModel workflowOptimizationModel(AiProperties properties) throws IOException {
+        if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };
+        return new OllamaWorkflowOptimizationModel(structuredOutput(properties), prompt("workflow-optimization.txt"));
+    }
+
     @Bean
     ExecutionSummaryModel executionSummaryModel(AiProperties properties) throws IOException {
         if (!properties.enabled()) return request -> { throw new AiProviderUnavailableException(); };

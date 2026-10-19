@@ -811,6 +811,108 @@
             "placement": "bottom"
         }
     }
+},
+{
+    "id": 15,
+    "title": "Optimization requests",
+    "type": "timeseries",
+    "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+    },
+    "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 45
+    },
+    "targets": [
+        {
+            "expr": "sum(rate(ai_optimization_requests_total[$__rate_interval]))",
+            "refId": "A",
+            "legendFormat": "Optimization requests"
+        }
+    ],
+    "fieldConfig": {
+        "defaults": {
+            "unit": "ops"
+        },
+        "overrides": []
+    },
+    "options": {
+        "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+        }
+    }
+},
+{
+    "id": 16,
+    "title": "Optimization failures",
+    "type": "timeseries",
+    "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+    },
+    "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 45
+    },
+    "targets": [
+        {
+            "expr": "sum(rate(ai_optimization_failures_total[$__rate_interval])) or vector(0)",
+            "refId": "A",
+            "legendFormat": "Optimization failures"
+        }
+    ],
+    "fieldConfig": {
+        "defaults": {
+            "unit": "ops"
+        },
+        "overrides": []
+    },
+    "options": {
+        "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+        }
+    }
+},
+{
+    "id": 17,
+    "title": "Optimization p95 duration",
+    "type": "timeseries",
+    "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+    },
+    "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 45
+    },
+    "targets": [
+        {
+            "expr": "histogram_quantile(0.95, sum by (le) (rate(ai_optimization_duration_seconds_bucket[$__rate_interval])))",
+            "refId": "A",
+            "legendFormat": "Optimization p95 duration"
+        }
+    ],
+    "fieldConfig": {
+        "defaults": {
+            "unit": "s"
+        },
+        "overrides": []
+    },
+    "options": {
+        "legend": {
+            "displayMode": "list",
+            "placement": "bottom"
+        }
+    }
 }
 ]
 }
