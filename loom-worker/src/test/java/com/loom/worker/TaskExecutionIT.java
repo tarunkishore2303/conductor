@@ -37,6 +37,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,6 +49,8 @@ class TaskExecutionIT {
 
     private static HttpServer http;
     private static java.util.concurrent.ExecutorService httpExecutor;
+    private static final Map<String, String> notifications = new ConcurrentHashMap<>();
+    private static final Map<String, AtomicInteger> flakyAttempts = new ConcurrentHashMap<>();
 
     @BeforeAll static void startHttpEndpoint() throws Exception {
         http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -59,6 +64,26 @@ class TaskExecutionIT {
         http.createContext("/unavailable", exchange -> {
             exchange.sendResponseHeaders(500, -1);
             exchange.close();
+        });
+        http.createContext("/orders", exchange -> {
+            byte[] body = "{\"id\":42,\"email\":\"demo@example.test\",\"internal\":\"omit\"}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body); exchange.close();
+        });
+        http.createContext("/notify", exchange -> {
+            byte[] body = exchange.getRequestBody().readNBytes(65537);
+            if (body.length > 65536) { exchange.sendResponseHeaders(413, -1); exchange.close(); return; }
+            notifications.put(exchange.getRequestURI().getPath().substring("/notify/".length()), new String(body, StandardCharsets.UTF_8));
+            exchange.sendResponseHeaders(204, -1); exchange.close();
+        });
+        http.createContext("/flaky", exchange -> {
+            int attempt = flakyAttempts.computeIfAbsent(exchange.getRequestURI().getPath().substring("/flaky/".length()), ignored -> new AtomicInteger()).incrementAndGet();
+            if (attempt <= 2) { exchange.sendResponseHeaders(500, -1); exchange.close(); return; }
+            byte[] body = "{\"id\":42}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body); exchange.close();
         });
         http.start();
     }
@@ -149,7 +174,7 @@ class TaskExecutionIT {
         UUID taskId = insertJobAndTask("step-compute");
 
         kafkaTemplate.send("task-queue", taskId.toString(),
-            new TaskEvent(UUID.randomUUID(), taskId, "step-compute", 3, 0));
+            new TaskEvent(jobId(taskId), taskId, "step-compute", 3, 0));
 
         Awaitility.await()
             .atMost(20, TimeUnit.SECONDS)
@@ -260,6 +285,7 @@ class TaskExecutionIT {
         assertThat(task.getTaskType()).isEqualTo(TaskType.HTTP_REQUEST);
         assertThat(configCodec.decode(task.getTaskType(), task.getTaskConfigJson())).isEqualTo(config);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id = ? AND status = 'COMPLETE'", Integer.class, taskId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT output_text FROM task_executions WHERE task_id = ?", String.class, taskId)).isNull();
     }
 
     @Test
@@ -303,12 +329,83 @@ class TaskExecutionIT {
                 new TransformTaskConfig("JSON_SELECT", "{\"id\":42,\"internal\":\"omitted\"}", List.of("id"), Map.of()), 0);
         dispatch(taskId, "real-transform", 0);
         awaitComplete(taskId);
+        assertThat(jdbc.queryForObject("SELECT output_text FROM task_executions WHERE task_id = ?", String.class, taskId)).isEqualTo("{\"id\":42}");
+    }
+
+    @Test
+    void committedSuccessfulOutputsFlowThroughKafkaDispatchedHttpTransformPostPipeline() {
+        String notification = UUID.randomUUID().toString();
+        UUID fetch = insertCapabilityTask("fetch", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("GET", localUrl("/orders"), 2000, null, null, true, null), 0);
+        UUID transform = insertLinkedTask(fetch, "select", TaskType.TRANSFORM,
+                new TransformTaskConfig("JSON_SELECT", null, List.of("id", "email"), Map.of(), "fetch"), 0);
+        UUID post = insertLinkedTask(transform, "notify", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("POST", localUrl("/notify/" + notification), 2000, "application/json", null, false, "select"), 0);
+        // Scheduler is outside this worker fixture: dispatch only after observing the previous committed completion.
+        dispatch(fetch, "fetch", 0); awaitComplete(fetch);
+        assertThat(output(fetch)).contains("\"internal\":\"omit\"");
+        dispatch(transform, "select", 0); awaitComplete(transform);
+        String selected = "{\"id\":42,\"email\":\"demo@example.test\"}";
+        assertThat(output(transform)).isEqualTo(selected);
+        dispatch(post, "notify", 0); awaitComplete(post);
+        assertThat(notifications.remove(notification)).isEqualTo(selected);
+        assertThat(output(post)).isNull();
+        assertThat(jdbc.queryForList("SELECT output_content_type FROM task_executions WHERE task_id IN (?,?) ORDER BY task_id", String.class, fetch, transform))
+                .containsExactly("application/json", "application/json");
+    }
+
+    @Test
+    void upstreamRetrySuccessExposesOnlySuccessfulAttemptOutputToTransform() {
+        String fixtureId = UUID.randomUUID().toString();
+        UUID fetch = insertCapabilityTask("fetch", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("GET", localUrl("/flaky/" + fixtureId), 2000, null, null, true, null), 2);
+        UUID transform = insertLinkedTask(fetch, "select", TaskType.TRANSFORM,
+                new TransformTaskConfig("JSON_SELECT", null, List.of("id"), Map.of(), "fetch"), 0);
+        dispatch(fetch, "fetch", 2); awaitComplete(fetch);
+        assertThat(jdbc.queryForList("SELECT status FROM task_executions WHERE task_id=? ORDER BY attempt_number", String.class, fetch))
+                .containsExactly("FAILED", "FAILED", "COMPLETE");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=? AND status='FAILED' AND output_text IS NULL AND output_content_type IS NULL", Integer.class, fetch)).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT output_text FROM task_executions WHERE task_id=? AND status='COMPLETE'", String.class, fetch)).isEqualTo("{\"id\":42}");
+        dispatch(transform, "select", 0); awaitComplete(transform);
+        assertThat(output(transform)).isEqualTo("{\"id\":42}");
+        assertThat(flakyAttempts.remove(fixtureId).get()).isEqualTo(3);
+    }
+
+    @Test
+    void failedUpstreamHasNoOutputAndDependentRemainsUndispatched() {
+        UUID fetch = insertCapabilityTask("fetch", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("GET", localUrl("/unavailable"), 2000, null, null, true, null), 2);
+        UUID transform = insertLinkedTask(fetch, "select", TaskType.TRANSFORM,
+                new TransformTaskConfig("JSON_SELECT", null, List.of("id"), Map.of(), "fetch"), 0);
+        dispatch(fetch, "fetch", 2);
+        Awaitility.await().atMost(25, TimeUnit.SECONDS).untilAsserted(() ->
+                assertThat(taskRepo.findById(fetch).orElseThrow().getStatus()).isEqualTo(TaskStatus.DEAD_LETTERED));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=? AND output_text IS NULL AND output_content_type IS NULL", Integer.class, fetch)).isEqualTo(3);
+        assertThat(taskRepo.findById(transform).orElseThrow().getStatus()).isEqualTo(TaskStatus.PENDING);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=?", Integer.class, transform)).isZero();
+        // This proves worker persistence, not scheduler behavior: no downstream event was dispatched here.
+    }
+
+    private UUID insertLinkedTask(UUID upstream, String logicalId, TaskType type, TaskConfig config, int retries) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("INSERT INTO tasks(id,job_id,name,logical_id,task_type,task_config_json,status,max_retries,retry_count,created_at,updated_at,version) VALUES(?,?,?,?,?,?,'PENDING',?,0,now(),now(),0)",
+                id, jobId(upstream), logicalId, logicalId, type.name(), configCodec.encode(config), retries);
+        jdbc.update("INSERT INTO task_dependencies(task_id,depends_on_task_id) VALUES(?,?)", id, upstream);
+        return id;
+    }
+
+    private UUID jobId(UUID taskId) {
+        return UUID.fromString(jdbc.queryForObject("SELECT job_id FROM tasks WHERE id=?", String.class, taskId));
+    }
+
+    private String output(UUID taskId) {
+        return jdbc.queryForObject("SELECT output_text FROM task_executions WHERE task_id=? AND status='COMPLETE'", String.class, taskId);
     }
 
     private UUID insertCapabilityTask(String name, TaskType type, TaskConfig config, int maxRetries) {
         UUID taskId = insertJobAndTask(name);
-        jdbc.update("UPDATE tasks SET task_type = ?, task_config_json = ?, max_retries = ? WHERE id = ?",
-                type.name(), configCodec.encode(config), maxRetries, taskId);
+        jdbc.update("UPDATE tasks SET logical_id = ?, task_type = ?, task_config_json = ?, max_retries = ? WHERE id = ?",
+                name, type.name(), configCodec.encode(config), maxRetries, taskId);
         return taskId;
     }
 

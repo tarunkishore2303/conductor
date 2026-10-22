@@ -19,6 +19,12 @@ import org.springframework.stereotype.Component;
 
 import java.net.URI;
 import java.net.SocketTimeoutException;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.nio.charset.CharacterCodingException;
+import java.util.Locale;
 import java.util.concurrent.*;
 
 @Component
@@ -51,7 +57,18 @@ public final class HttpRequestTaskHandler implements TaskHandler {
         var request = new HttpUriRequestBase(config.method(), URI.create(config.url()));
         request.setConfig(RequestConfig.custom().setConnectionRequestTimeout(Timeout.ofMilliseconds(timeoutMillis))
                 .setResponseTimeout(Timeout.ofMilliseconds(timeoutMillis)).setRedirectsEnabled(false).build());
-        if (config.body() != null) request.setEntity(new StringEntity(config.body(), ContentType.APPLICATION_JSON));
+        String body = config.body();
+        if (config.bodyTaskId() != null) {
+            var input = context.input();
+            if (input == null || !config.bodyTaskId().equals(input.sourceTaskId()))
+                throw new TaskExecutionException("TASK_OUTPUT_MISSING", "Declared task output is unavailable");
+            if (!"application/json".equals(input.contentType()))
+                throw new TaskExecutionException("INCOMPATIBLE_TASK_OUTPUT", "HTTP JSON body requires application/json output");
+            body = input.output();
+        }
+        if (body != null && body.getBytes(StandardCharsets.UTF_8).length > properties.http().maxRequestBytes())
+            throw new TaskExecutionException("HTTP_REQUEST_TOO_LARGE", "HTTP request body exceeds configured limit");
+        if (body != null) request.setEntity(new StringEntity(body, ContentType.APPLICATION_JSON));
         Future<TaskExecutionResult> work = requests.submit(() -> client.execute(request, response -> {
             int code = response.getCode();
             if (code < 200 || code >= 300) {
@@ -59,6 +76,7 @@ public final class HttpRequestTaskHandler implements TaskHandler {
                 throw new HttpFailure("HTTP_STATUS_" + code, "HTTP endpoint returned status " + code);
             }
             var entity = response.getEntity();
+            ByteArrayOutputStream captured = config.captureResponseBody() ? new ByteArrayOutputStream() : null;
             if (entity != null) {
                 int max = properties.http().maxResponseBytes();
                 if (entity.getContentLength() > max) { request.cancel(); throw new HttpFailure("HTTP_RESPONSE_TOO_LARGE", "HTTP response exceeds configured limit"); }
@@ -68,7 +86,29 @@ public final class HttpRequestTaskHandler implements TaskHandler {
                     for (int read; (read = input.read(buffer)) != -1;) {
                         total += read;
                         if (total > max) { request.cancel(); throw new HttpFailure("HTTP_RESPONSE_TOO_LARGE", "HTTP response exceeds configured limit"); }
+                        if (captured != null) {
+                            if (total > properties.output().maxBytes()) {
+                                request.cancel(); throw new HttpFailure("TASK_OUTPUT_TOO_LARGE", "Captured output exceeds configured limit");
+                            }
+                            captured.write(buffer, 0, read);
+                        }
                     }
+                }
+            }
+            if (captured != null) {
+                String contentType = capturedType(entity == null ? null : entity.getContentType(), captured.size());
+                if (entity != null && entity.getContentEncoding() != null && !"identity".equalsIgnoreCase(entity.getContentEncoding()))
+                    throw new HttpFailure("INCOMPATIBLE_TASK_OUTPUT", "Encoded HTTP response capture is unsupported");
+                try {
+                    String output = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                            .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(captured.toByteArray())).toString();
+                    try { TaskOutputLimits.validate(output, contentType, properties.output().maxBytes()); }
+                    catch (IllegalArgumentException invalid) {
+                        throw new HttpFailure("INCOMPATIBLE_TASK_OUTPUT", "Captured HTTP output must be database-safe UTF-8 text");
+                    }
+                    return new TaskExecutionResult(output, contentType);
+                } catch (CharacterCodingException malformed) {
+                    throw new HttpFailure("INCOMPATIBLE_TASK_OUTPUT", "Captured HTTP output must be valid UTF-8");
                 }
             }
             return TaskExecutionResult.completed();
@@ -87,6 +127,19 @@ public final class HttpRequestTaskHandler implements TaskHandler {
         }
     }
     @PreDestroy public void close() throws Exception { requests.shutdownNow(); client.close(); }
+    private static String capturedType(String header, int size) throws HttpFailure {
+        if (header == null && size == 0) return "text/plain";
+        try {
+            var type = ContentType.parse(header);
+            String mime = type.getMimeType();
+            if (!("application/json".equalsIgnoreCase(mime) || "text/plain".equalsIgnoreCase(mime))
+                    || (type.getCharset() != null && !StandardCharsets.UTF_8.equals(type.getCharset())))
+                throw new IllegalArgumentException();
+            return mime.toLowerCase(Locale.ROOT);
+        } catch (RuntimeException unsupported) {
+            throw new HttpFailure("INCOMPATIBLE_TASK_OUTPUT", "HTTP response capture supports UTF-8 JSON or plain text only");
+        }
+    }
     private static final class HttpFailure extends java.io.IOException {
         private final String code;
         HttpFailure(String code, String message) { super(message); this.code = code; }

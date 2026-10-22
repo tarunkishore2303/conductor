@@ -1,9 +1,11 @@
 package com.loom.worker.service;
 
-/** Bounded transient output only. Results are not persisted or passed between tasks. */
-public record TaskExecutionResult(String output) {
+import com.loom.capability.TaskOutputLimits;
+
+/** A successful whole-text result; the worker owns persistence and configured limits. */
+public record TaskExecutionResult(String output, String contentType) {
     public TaskExecutionResult {
-        if (output != null && output.length() > 65536) throw new IllegalArgumentException("Task output exceeds limit");
+        TaskOutputLimits.validate(output, contentType, TaskOutputLimits.MAX_BYTES);
     }
-    public static TaskExecutionResult completed() { return new TaskExecutionResult(null); }
+    public static TaskExecutionResult completed() { return new TaskExecutionResult(null, null); }
 }
