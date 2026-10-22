@@ -9,6 +9,7 @@ import com.loom.common.model.*;
 import com.tarunkishore.loom_api.repository.*;
 
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 import java.util.*;
@@ -150,4 +151,46 @@ class FailureContextCollectorTest {
                 .isInstanceOf(AiOutputException.class)
                 .hasMessageContaining("300");
     }
+    @Test
+    void successfulOutputChangesDoNotAffectFailureFactsOrIncidentDocuments() {
+        var job = new Job();
+        job.setId(id);
+        job.setStatus(JobStatus.FAILED);
+        var failed = new Task();
+        failed.setId(UUID.randomUUID());
+        failed.setName("failed");
+        failed.setStatus(TaskStatus.DEAD_LETTERED);
+        var completed = new Task();
+        completed.setId(UUID.randomUUID());
+        completed.setName("completed");
+        completed.setStatus(TaskStatus.COMPLETE);
+        job.setTasks(List.of(failed, completed));
+        var failure = new TaskExecution();
+        failure.setTask(failed);
+        failure.setStatus(TaskStatus.FAILED);
+        failure.setAttemptNumber(0);
+        failure.setErrorType("HTTP_STATUS_500");
+        failure.setErrorMessage("HTTP request failed");
+        var success = new TaskExecution();
+        success.setTask(completed);
+        success.setStatus(TaskStatus.COMPLETE);
+        success.setAttemptNumber(0);
+        failure.setStartedAt(Instant.parse("2026-10-20T12:00:00Z"));
+        failure.setCompletedAt(Instant.parse("2026-10-20T12:00:01Z"));
+        success.setStartedAt(Instant.parse("2026-10-20T12:00:00Z"));
+        success.setCompletedAt(Instant.parse("2026-10-20T12:00:01Z"));
+        when(jobs.findByIdWithTasks(id)).thenReturn(Optional.of(job));
+        when(evidence.findForJob(eq(id), any())).thenReturn(List.of(failure, success));
+        var mapper = JsonMapper.builder().build();
+        String before = mapper.writeValueAsString(collector.collect(id));
+        var documentsBefore = new IncidentDocumentBuilder().build(collector.collect(id));
+        success.setOutputText("OUTPUT_PRIVATE_SENTINEL");
+        success.setOutputContentType("text/plain");
+        var after = collector.collect(id);
+        // Failure-analysis context hashing uses this exact serialized DTO, never the entity.
+        assertThat(mapper.writeValueAsString(after)).isEqualTo(before)
+                .doesNotContain("OUTPUT_PRIVATE_SENTINEL", "outputText", "outputContentType");
+        assertThat(new IncidentDocumentBuilder().build(after)).isEqualTo(documentsBefore);
+    }
+
 }

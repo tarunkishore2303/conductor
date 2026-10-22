@@ -2,6 +2,10 @@ package com.tarunkishore.loom_api.service;
 
 import com.loom.capability.*;
 import com.loom.common.dto.TaskDefinition;
+import com.loom.common.dto.JobSubmitRequest;
+import com.tarunkishore.loom_api.repository.JobRepository;
+import com.tarunkishore.loom_api.repository.TaskRepository;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.loom.common.model.FailurePolicy;
 import com.loom.common.model.WorkflowTemplate;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
@@ -88,4 +92,56 @@ class TaskCapabilityValidationTest {
         assertThatThrownBy(() -> mapper.readValue("{\"taskId\":\"a\",\"name\":\"A\",\"type\":\"DELAY\",\"config\":{\"durationMillis\":1,\"command\":\"whoami\"}}", TaskDefinition.class))
                 .isInstanceOf(RuntimeException.class);
     }
+    @Test void directDependencyInputPersistsDeclarativeReferenceWithoutExecution() {
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        var result = service.createTemplate(request(
+                task("fetch", TaskType.HTTP_REQUEST,
+                        new HttpRequestTaskConfig("GET", "https://example.test/orders", 1000, null, null, true, null)),
+                task("select", TaskType.TRANSFORM,
+                        new TransformTaskConfig("JSON_SELECT", null, List.of("id"), Map.of(), "fetch"), "fetch"),
+                task("notify", TaskType.HTTP_REQUEST,
+                        new HttpRequestTaskConfig("POST", "https://example.test/notify", 1000,
+                                "application/json", null, false, "select"), "select")));
+        var selectedConfig = (TransformTaskConfig) service.parseTasks(result).get(1).config();
+        assertThat(selectedConfig.input()).isNull();
+        assertThat(selectedConfig.inputTaskId()).isEqualTo("fetch");
+        verifyNoInteractions(jobs);
+    }
+    @Test void undeclaredReferenceCannotPersistManualWorkflow() {
+        assertThatThrownBy(() -> service.createTemplate(request(
+                task("fetch", TaskType.NOOP, new NoOpTaskConfig()),
+                task("select", TaskType.TRANSFORM,
+                        new TransformTaskConfig("JSON_SELECT", null, List.of("id"), Map.of(), "fetch")))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("direct dependency");
+        verifyNoInteractions(repository, jobs);
+    }
+    @Test void oldHttpAndStaticTransformJsonRemainReadable() {
+        var template = new WorkflowTemplate();
+        template.setDagDefinitionJson("""
+                [{"taskId":"fetch","name":"Fetch","type":"HTTP_REQUEST","config":{
+                    "method":"GET","url":"https://example.test/orders","timeoutMillis":1000},"dependsOn":[],"maxRetries":0},
+                 {"taskId":"select","name":"Select","type":"TRANSFORM","config":{
+                    "operation":"JSON_SELECT","input":"{}","fields":["id"],"renames":{}},"dependsOn":["fetch"],"maxRetries":0}]
+                """);
+        var parsed = service.parseTasks(template);
+        var http = (HttpRequestTaskConfig) parsed.getFirst().config();
+        assertThat(http.captureResponseBody()).isFalse();
+        assertThat(http.bodyTaskId()).isNull();
+        assertThat(((TransformTaskConfig) parsed.get(1).config()).input()).isEqualTo("{}");
+    }
+
+    @Test void directJobSubmissionAlsoRejectsUndeclaredDataflowBeforePersistence() {
+        var jobRepository = mock(JobRepository.class);
+        var taskRepository = mock(TaskRepository.class);
+        var events = mock(JobEventPublisher.class);
+        var jobService = new JobService(jobRepository, taskRepository, new DAGValidator(), events,
+                new SimpleMeterRegistry(), validators, new TaskConfigCodec(validators));
+        var tasks = List.of(task("fetch", TaskType.NOOP, new NoOpTaskConfig()),
+                task("select", TaskType.TRANSFORM,
+                        new TransformTaskConfig("JSON_SELECT", null, List.of("id"), Map.of(), "fetch")));
+        assertThatThrownBy(() -> jobService.submit(new JobSubmitRequest("invalid", tasks, FailurePolicy.FAIL_FAST)))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("direct dependency");
+        verifyNoInteractions(jobRepository, taskRepository, events);
+    }
+
 }

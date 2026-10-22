@@ -174,6 +174,56 @@ class AiWorkflowProposalServiceTest {
         verifyNoInteractions(workflows);
     }
 
+    @Test
+    void generatedDataflowReferencesRemainPreviewOnly() {
+        var generated = dataflow("fetch", List.of("fetch"));
+        when(client.generate(anyString())).thenReturn(new AiWorkflowClient.Generation(generated, "fake"));
+        var preview = service.generate("capture, select and notify");
+        assertThat(preview.validation().valid()).isTrue();
+        assertThat(preview.workflow().tasks().get(1).config())
+                .isEqualTo(new TransformTaskConfig("JSON_SELECT", null, List.of("id"), java.util.Map.of(), "fetch"));
+        verify(repo).save(any());
+        verifyNoInteractions(workflows);
+    }
+
+    @Test
+    void invalidReferenceRemainsInvalidPreviewAndCannotBeApproved() {
+        var generated = dataflow("fetch", List.of());
+        when(client.generate(anyString())).thenReturn(new AiWorkflowClient.Generation(generated, "fake"));
+        var preview = service.generate("invalid reference");
+        assertThat(preview.validation().valid()).isFalse();
+        var captor = ArgumentCaptor.forClass(AiWorkflowProposal.class);
+        verify(repo).save(captor.capture());
+        var proposal = captor.getValue();
+        when(repo.findForApproval(proposal.getId())).thenReturn(Optional.of(proposal));
+        assertThatThrownBy(() -> service.approve(proposal.getId())).isInstanceOf(AiOutputException.class);
+        verifyNoInteractions(workflows);
+    }
+
+    @Test
+    void rejectsUnknownSelfAndAncestorOnlyDataflowReferences() {
+        for (String source : List.of("unknown", "select", "notify")) {
+            assertThat(validator.validate(validator.map(dataflow(source, List.of("fetch")))))
+                    .isNotEmpty();
+        }
+        var generated = dataflow("fetch", List.of("middle"));
+        var tasks = new java.util.ArrayList<>(generated.tasks());
+        tasks.add(task("middle", List.of("fetch")));
+        assertThat(validator.validate(validator.map(new GeneratedWorkflow("pipeline", "desc", tasks))))
+                .isNotEmpty();
+    }
+
+    private GeneratedWorkflow dataflow(String inputSource, List<String> dependencies) {
+        return new GeneratedWorkflow("pipeline", "whole bounded output", List.of(
+                new GeneratedWorkflow.Task("fetch", "Fetch", "HTTP_REQUEST", List.of(), 1,
+                        new HttpRequestTaskConfig("GET", "https://example.test/orders", 1000, null, null, true, null)),
+                new GeneratedWorkflow.Task("select", "Select", "TRANSFORM", dependencies, 0,
+                        new TransformTaskConfig("JSON_SELECT", null, List.of("id"), java.util.Map.of(), inputSource)),
+                new GeneratedWorkflow.Task("notify", "Notify", "HTTP_REQUEST", List.of("select"), 1,
+                        new HttpRequestTaskConfig("POST", "https://example.test/notify", 1000,
+                                "application/json", null, false, "select"))));
+    }
+
     private static TaskCapabilityValidators capabilities() {
         var properties = TaskProperties.defaults();
         return new TaskCapabilityValidators(List.of(new NoOpTaskConfigValidator(),

@@ -3,6 +3,7 @@ package com.tarunkishore.loom_api.ai;
 import com.tarunkishore.loom_api.exception.AiOutputException;
 
 import com.loom.capability.TaskCapabilityValidators;
+import com.loom.capability.TaskDataflowValidator;
 import com.loom.capability.TaskType;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.FailurePolicy;
@@ -14,6 +15,8 @@ import java.util.List;
 
 @Component
 public class WorkflowProposalValidator {
+    private final TaskDataflowValidator dataflowValidator = new TaskDataflowValidator();
+
     private final DAGValidator dagValidator;
     private final TaskCapabilityValidators capabilities;
 
@@ -60,8 +63,10 @@ public class WorkflowProposalValidator {
 
     public List<String> validate(WorkflowTemplateRequest workflow) {
         try {
-            dagValidator.validate(workflow.tasks());
             workflow.tasks().forEach(task -> capabilities.validate(task.type(), task.config()));
+            dataflowValidator.validate(workflow.tasks().stream().map(task ->
+                    new TaskDataflowValidator.DataflowTask(task.taskId(), task.dependsOn(), task.config())).toList());
+            dagValidator.validate(workflow.tasks());
             return List.of();
         } catch (IllegalArgumentException e) {
             return List.of(e.getMessage());

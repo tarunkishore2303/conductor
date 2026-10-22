@@ -1,6 +1,8 @@
 package com.loom.ai.provider;
 
 import com.loom.ai.model.GeneratedWorkflowProposal;
+import com.loom.capability.TransformTaskConfig;
+import com.loom.capability.HttpRequestTaskConfig;
 import com.loom.ai.exception.AiOutputValidationException;
 import com.loom.ai.exception.AiProviderUnavailableException;
 import org.junit.jupiter.api.Test;
@@ -33,7 +35,7 @@ class OllamaWorkflowGenerationModelTest {
         var captor = ArgumentCaptor.forClass(Prompt.class);
         verify(chatModel).call(captor.capture());
         var options = (OllamaChatOptions) captor.getValue().getOptions();
-        assertThat(options.getOutputSchema()).contains("required", "tasks", "identifier", "HTTP_REQUEST", "TRANSFORM", "DELAY", "additionalProperties");
+        assertThat(options.getOutputSchema()).contains("required", "tasks", "identifier", "HTTP_REQUEST", "TRANSFORM", "DELAY", "additionalProperties", "captureResponseBody", "inputTaskId", "bodyTaskId");
         assertThat(captor.getValue().getInstructions()).hasSize(2);
     }
     @Test
@@ -88,6 +90,23 @@ class OllamaWorkflowGenerationModelTest {
                 {"name":"Wait","description":"Demo","tasks":[{"identifier":"wait","name":"Wait","type":"DELAY","dependencies":[],"maxRetries":0,"config":{"durationMillis":1,"script":"arbitrary"}}]}
                 """));
         assertThatThrownBy(() -> model.generate("wait")).isInstanceOf(AiOutputValidationException.class);
+    }
+
+    @Test
+    void parsesWholeOutputReferencesWithoutRuntimeOutputContent() {
+        when(chatModel.call(any(Prompt.class))).thenReturn(response("""
+                {"name":"Pipeline","description":"Demo","tasks":[
+                  {"identifier":"select","name":"Select","type":"TRANSFORM","dependencies":["fetch"],"maxRetries":0,
+                   "config":{"operation":"JSON_SELECT","inputTaskId":"fetch","fields":["id"]}},
+                  {"identifier":"notify","name":"Notify","type":"HTTP_REQUEST","dependencies":["select"],"maxRetries":1,
+                   "config":{"method":"POST","url":"https://example.test/notify","timeoutMillis":1000,
+                             "contentType":"application/json","bodyTaskId":"select","captureResponseBody":false}}]}
+                """));
+        var result = model.generate("select and notify");
+        assertThat(((TransformTaskConfig) result.tasks().getFirst().config()).inputTaskId())
+                .isEqualTo("fetch");
+        assertThat(((HttpRequestTaskConfig) result.tasks().get(1).config()).bodyTaskId())
+                .isEqualTo("select");
     }
 
     private ChatResponse response(String text) {
