@@ -1,5 +1,7 @@
 package com.loom.common.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -45,6 +47,15 @@ public class TaskExecution {
     private String errorMessage;
 
     private Instant retryScheduledAt;
+
+    /** Explicitly captured successful output; excluded from ordinary entity serialization. */
+    @JsonIgnore
+    @Column(name = "output_text", columnDefinition = "TEXT")
+    private String outputText;
+
+    @JsonIgnore
+    @Column(name = "output_content_type", length = 32)
+    private String outputContentType;
 
     @PrePersist
     void onPersist() {
