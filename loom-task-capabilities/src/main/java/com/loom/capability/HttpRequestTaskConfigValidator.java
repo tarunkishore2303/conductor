@@ -22,6 +22,12 @@ public final class HttpRequestTaskConfigValidator implements TaskConfigValidator
         if (http.timeoutMillis() == null || http.timeoutMillis() < 1 || http.timeoutMillis() > properties.http().maxTimeout().toMillis())
             throw new IllegalArgumentException("HTTP timeout is outside allowed bounds");
         if (http.body() != null && http.body().getBytes(StandardCharsets.UTF_8).length > properties.http().maxRequestBytes()) throw new IllegalArgumentException("HTTP body exceeds allowed size");
+        if (http.bodyTaskId() != null) {
+            TaskDataflowValidator.validateReferenceId(http.bodyTaskId());
+            if (http.body() != null) throw new IllegalArgumentException("HTTP body and bodyTaskId are mutually exclusive");
+            if (!"POST".equals(http.method())) throw new IllegalArgumentException("Only POST may reference a task body");
+            if (!"application/json".equals(http.contentType())) throw new IllegalArgumentException("POST body reference requires application/json content type");
+        }
         if ("GET".equals(http.method()) && http.body() != null && !http.body().isEmpty()) throw new IllegalArgumentException("GET must not contain a body");
         if (http.contentType() != null && !"application/json".equals(http.contentType())) throw new IllegalArgumentException("Only application/json content type is supported");
         if ("POST".equals(http.method()) && http.body() != null && !"application/json".equals(http.contentType())) throw new IllegalArgumentException("POST body requires application/json content type");
