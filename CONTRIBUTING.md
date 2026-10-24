@@ -20,7 +20,7 @@ Run from the repository root:
 python -m unittest discover -s scripts/tests -q
 git diff --check
 docker compose --profile ai --profile demo config --quiet
-docker compose --parallel 2 --profile ai build loom-api loom-ai loom-worker-1 loom-scheduler loom-monitor
+COMPOSE_BAKE=false docker compose --parallel 2 --profile ai build loom-api loom-ai loom-worker-1 loom-scheduler loom-monitor
 ```
 
 The API and worker currently contain all container-backed integration tests.

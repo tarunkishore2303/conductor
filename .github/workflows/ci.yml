@@ -104,4 +104,7 @@ jobs:
       - name: Validate all Compose profiles
         run: docker compose --profile ai --profile demo config --quiet
       - name: Build five distinct application images without starting services
+        env:
+          # Bake schedules its own DAG; use Compose's bounded build concurrency.
+          COMPOSE_BAKE: 'false'
         run: docker compose --parallel 2 --profile ai build loom-api loom-ai loom-worker-1 loom-scheduler loom-monitor
