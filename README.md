@@ -1,5 +1,7 @@
 # Conductor
 
+[![Conductor CI](https://github.com/tarunkishore2303/conductor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tarunkishore2303/conductor/actions/workflows/ci.yml)
+
 **Conductor evolves [Project Loom](https://github.com/tarunkishore2303/project-loom) into an intelligent distributed workflow platform.** This repository preserves Loom's original Git history. The orchestration modules retain their `loom-*` names while the platform evolves.
 
 The current release includes an isolated Ollama-powered AI service for structured workflow proposals, explicit approval, failure interpretation, and historical incident retrieval. Deterministic validation and execution remain in Conductor. Workers execute typed NOOP, DELAY, HTTP_REQUEST and TRANSFORM capabilities through an IoC handler registry.
@@ -780,6 +782,26 @@ Key metrics:
 
 ### Run Tests
 
+`Conductor CI` verifies pull requests and pushes to `main` with four independent
+jobs: **Build & Unit Tests**, **Integration Tests**, **Python Tests**, and
+**Container Build**. It uses Ubuntu, Temurin Java 25, the checked-in Gradle
+wrapper, Python 3.13, and Docker/Testcontainers defaults. Local development stays
+Podman-first. No real Ollama models, cloud APIs, or secrets are needed.
+
+`./gradlew build` runs unit tests and builds artifacts; `*IT` classes are excluded
+from that task. API and worker `integrationTest` tasks cover real database/container
+behavior, fresh Flyway schemas, and V7/V10 upgrade paths through V11. Python tests
+exercise smoke-helper/fixture behavior using only the standard library. CI also
+checks patch whitespace, rejects edits to merged migrations, validates all Compose
+profiles, checks tracked files remain clean after build, and builds the five
+distinct application images without launching services. Failed Java jobs retain
+test reports for seven days.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete pre-PR commands and
+recommended required checks. Dependabot checks Gradle and Actions dependencies
+weekly, groups minor/patch updates, and never auto-merges. CI does not publish
+releases, deploy services, or enforce an arbitrary coverage threshold.
+
 ```bash
 # Unit tests only
 ./gradlew :loom-api:test --tests "com.tarunkishore.loom_api.service.DAGValidatorTest"
@@ -796,13 +818,14 @@ Key metrics:
 
 Current verification on Java 25 / Podman passed:
 
-- `./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon`: 490 unit tests, 43 API integration tests and eight worker integration tests; no failures or skips.
-- `python -m unittest discover -s scripts/tests -q`: 27 helper tests.
+- `./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon --rerun-tasks`: 566 unit tests, 44 API integration tests and 11 worker integration tests; no failures or skips.
+- `python -m unittest discover -s scripts/tests -q`: 31 helper tests.
 - `git diff --check`: passed.
 
 Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka
 and Redis containers without live Ollama calls. Migration coverage upgrades V7 data
-to V8 and preserves historical NOOP tasks.
+through the latest schema and V10 attempts to V11, preserving historical NOOP
+tasks and nullable outputs.
 
 The local two-worker demo verified overlapping parallel branches, all four handlers,
 HTTP 500 attempts numbered 0, 1 and 2 followed by DLQ, and a real Ollama-generated
