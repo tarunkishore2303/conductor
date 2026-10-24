@@ -3,4 +3,3 @@ export function ResourceState({ loading, error, retry }: { loading: boolean; err
   if (error) return <div className="resource-state error" role="alert"><strong>Could not load this view</strong><p>{error.message}</p><button onClick={retry}>Try again</button></div>
   return null
 }
-
