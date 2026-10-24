@@ -15,6 +15,54 @@ Submit a DAG of tasks via REST. Loom validates the graph, persists it, and execu
 
 ---
 
+## Control Plane
+
+The read-only React/TypeScript/Vite MVP exposes real workflow definitions and run
+state at **http://localhost:3001**. No Ollama models are required.
+
+```powershell
+.\scripts\compose.ps1 up --build -d
+```
+
+For frontend development, start the API stack, then:
+
+```bash
+cd conductor-ui
+npm ci
+npm run dev
+# http://localhost:5173
+npm run build
+npm test
+```
+
+Routes: `/workflows`, `/workflows/:workflowId`, `/runs`, `/runs/:jobId`.
+Workflow details include a read-only, automatically laid-out dependency graph.
+Run details show task status, capability, retry counters/limits, and record
+created/updated timestamps. These timestamps are **not active attempt durations**.
+Active runs (`CREATED`, `RUNNING`, `CANCELLING`) refresh every two seconds while
+visible; polling stops at terminal state, on navigation, or on request error
+(explicit retry is available). Lists have manual refresh and show up to 50 items.
+
+```mermaid
+flowchart LR
+    Browser --> UI[React Control Plane]
+    UI -->|same-origin REST /api| Proxy[Vite dev proxy / nginx]
+    Proxy --> API[loom-api]
+```
+
+The default `VITE_API_BASE_URL=/api/v1` works through both proxies. The API itself
+is available at http://localhost:8080. Never put a Compose hostname in a browser
+URL: only nginx resolves `loom-api`. No CORS changes are needed. A custom absolute
+`VITE_API_BASE_URL` requires the target API's explicit CORS policy; it is a build-time
+setting, not an nginx runtime setting. The nginx API proxy accepts GET/HEAD only.
+
+New bounded reads: `GET /api/v1/workflows?limit=50` and
+`GET /api/v1/jobs?limit=50` (limits 1–100, newest first). Existing detail APIs are
+unchanged. Run lists omit task payloads; normal UI views never render task outputs
+or capability configuration. This is an unauthenticated local MVP: no editor,
+execution buttons, AI pages, attempt history, runtime DAG, SSE, or authentication.
+The UI port binds to loopback. Next: SSE live execution updates.
+
 ## AI Workflow Generation
 
 Natural language becomes a structured proposal. Conductor validates its DAG,
@@ -782,9 +830,9 @@ Key metrics:
 
 ### Run Tests
 
-`Conductor CI` verifies pull requests and pushes to `main` with four independent
-jobs: **Build & Unit Tests**, **Integration Tests**, **Python Tests**, and
-**Container Build**. It uses Ubuntu, Temurin Java 25, the checked-in Gradle
+`Conductor CI` verifies pull requests and pushes to `main` with five independent
+jobs: **Build & Unit Tests**, **Integration Tests**, **Python Tests**,
+**Frontend Build**, and **Container Build**. It uses Ubuntu, Temurin Java 25, the checked-in Gradle
 wrapper, Python 3.13, and Docker/Testcontainers defaults. Local development stays
 Podman-first. No real Ollama models, cloud APIs, or secrets are needed.
 
@@ -794,7 +842,10 @@ behavior, fresh Flyway schemas, and V7/V10 upgrade paths through V11. Python tes
 exercise smoke-helper/fixture behavior using only the standard library. CI also
 checks patch whitespace, rejects edits to merged migrations, validates all Compose
 profiles, checks tracked files remain clean after build, and builds the five
-distinct application images without launching services. Failed Java jobs retain
+distinct backend images plus the Control Plane image without launching services.
+Frontend Build uses Node 24 and runs `npm ci`, the typechecked production build,
+and focused Vitest tests. Add this stable check to recommended branch protections.
+Failed Java jobs retain
 test reports for seven days.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete pre-PR commands and

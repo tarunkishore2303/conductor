@@ -5,11 +5,14 @@ import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateResponse;
 import com.tarunkishore.loom_api.service.WorkflowService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -18,6 +21,11 @@ import java.util.UUID;
 public class WorkflowController {
 
     private final WorkflowService workflowService;
+
+    @GetMapping
+    public List<WorkflowTemplateResponse> list(@RequestParam(defaultValue = "50") @Min(1) @Max(100) int limit) {
+        return workflowService.listTemplates(limit);
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
