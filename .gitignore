@@ -44,3 +44,5 @@ out/
 # Local Ollama delegation artifacts and usage records.
 .local-delegation/
 __pycache__/
+node_modules/
+**/dist/
