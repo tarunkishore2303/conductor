@@ -14,6 +14,8 @@ import java.util.UUID;
 
 public interface JobRepository extends JpaRepository<Job, UUID> {
 
+    List<Job> findAllBy(Pageable pageable);
+
     @Query("SELECT j FROM Job j LEFT JOIN FETCH j.tasks WHERE j.id = :id")
     Optional<Job> findByIdWithTasks(@Param("id") UUID id);
     @Query("select j from Job j where j.workflowTemplateId=:workflowId and j.status in :statuses and j.createdAt>=:since order by j.createdAt desc,j.id")

@@ -2,13 +2,17 @@ package com.tarunkishore.loom_api.controller;
 
 import com.loom.common.dto.JobSubmitRequest;
 import com.tarunkishore.loom_api.dto.JobResponse;
+import com.tarunkishore.loom_api.dto.JobSummaryResponse;
 import com.tarunkishore.loom_api.service.JobService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/jobs")
@@ -16,6 +20,11 @@ import java.util.UUID;
 public class JobController {
 
     private final JobService jobService;
+
+    @GetMapping
+    public List<JobSummaryResponse> list(@RequestParam(defaultValue = "50") @Min(1) @Max(100) int limit) {
+        return jobService.listJobs(limit);
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
