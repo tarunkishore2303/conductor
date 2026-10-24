@@ -187,6 +187,18 @@
                       "null"
                     ],
                     "maxLength": 65536
+                  },
+                  "captureResponseBody": {
+                    "type": "boolean"
+                  },
+                  "bodyTaskId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
                   }
                 },
                 "required": [
@@ -267,13 +279,40 @@
                       "type": "string",
                       "maxLength": 64
                     }
+                  },
+                  "inputTaskId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
                   }
                 },
                 "required": [
-                  "operation",
-                  "input"
+                  "operation"
                 ],
-                "additionalProperties": false
+                "additionalProperties": false,
+                "oneOf": [
+                  {
+                    "required": [
+                      "input"
+                    ],
+                    "not": {
+                      "required": [
+                        "inputTaskId"
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "inputTaskId"
+                    ],
+                    "not": {
+                      "required": [
+                        "input"
+                      ]
+                    }
+                  }
+                ]
               }
             },
             "required": [

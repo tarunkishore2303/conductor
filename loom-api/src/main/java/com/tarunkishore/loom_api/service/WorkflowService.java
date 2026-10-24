@@ -4,6 +4,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import com.loom.capability.TaskCapabilityValidators;
+import com.loom.capability.TaskDataflowValidator;
 import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.Job;
@@ -21,6 +22,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class WorkflowService {
+    private final TaskDataflowValidator dataflowValidator = new TaskDataflowValidator();
+
 
     private final WorkflowTemplateRepository templateRepo;
     private final JobService jobService;
@@ -30,8 +33,10 @@ public class WorkflowService {
 
     @Transactional
     public WorkflowTemplate createTemplate(WorkflowTemplateRequest request) {
-        dagValidator.validate(request.tasks());
         request.tasks().forEach(task -> capabilityValidators.validate(task.type(), task.config()));
+        dataflowValidator.validate(request.tasks().stream().map(task ->
+                new TaskDataflowValidator.DataflowTask(task.taskId(), task.dependsOn(), task.config())).toList());
+        dagValidator.validate(request.tasks());
 
         String dagJson;
         try {

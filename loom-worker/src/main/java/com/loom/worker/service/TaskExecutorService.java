@@ -10,6 +10,9 @@ import com.loom.worker.repository.TaskExecutionJpaRepository;
 import com.loom.worker.repository.WorkerTaskRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import com.loom.capability.TaskConfigCodec;
+import com.loom.capability.TaskConfig;
+import com.loom.capability.TaskProperties;
+import com.loom.capability.TaskOutputLimits;
 import com.loom.observability.OperationMetrics;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -40,6 +43,8 @@ public class TaskExecutorService {
     private final TaskExecutionJpaRepository executionRepo;
     private final TaskHandlerRegistry handlers;
     private final TaskConfigCodec configCodec;
+    private final TaskOutputResolver outputResolver;
+    private final TaskProperties taskProperties;
     private final RedissonClient redisson;
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final ScheduledExecutorService retryExecutor;
@@ -98,6 +103,10 @@ public class TaskExecutorService {
         Task task = taskRepo.findById(event.taskId()).orElseThrow(
             () -> new IllegalArgumentException("Task not found: " + event.taskId()));
 
+        if (task.getJob() == null || !event.jobId().equals(task.getJob().getId())) {
+            throw new IllegalArgumentException("Task event scope does not match persisted job");
+        }
+
         if (task.getStatus() != TaskStatus.PENDING) {
             log.info("Task {} already in status {} — skipping", event.taskId(), task.getStatus());
             return;
@@ -117,13 +126,21 @@ public class TaskExecutorService {
         var observation = OperationMetrics.startHandler(meterRegistry,
                 OperationMetrics.HandlerType.valueOf(task.getTaskType().name()));
         try {
-            com.loom.capability.TaskConfig config;
+            TaskConfig config;
             try {
                 config = configCodec.decode(task.getTaskType(), task.getTaskConfigJson());
             } catch (IllegalArgumentException invalid) {
                 throw new TaskExecutionException("INVALID_TASK_CONFIG", "Task configuration is invalid");
             }
-            handlers.requireHandler(task.getTaskType()).execute(new TaskExecutionContext(event, config));
+            var input = outputResolver.resolve(task, config);
+            var result = handlers.requireHandler(task.getTaskType()).execute(new TaskExecutionContext(event, config, input));
+            if (result == null) throw new TaskExecutionException("INVALID_TASK_OUTPUT", "Handler did not return a result");
+            try { TaskOutputLimits.validate(result.output(), result.contentType(), taskProperties.output().maxBytes()); }
+            catch (IllegalArgumentException invalid) {
+                throw new TaskExecutionException("TASK_OUTPUT_TOO_LARGE", "Task output exceeds supported bounds or content type");
+            }
+            execution.setOutputText(result.output());
+            execution.setOutputContentType(result.contentType());
 
             execution.setStatus(TaskStatus.COMPLETE);
             execution.setCompletedAt(Instant.now());
@@ -143,6 +160,8 @@ public class TaskExecutorService {
             log.error("Task {} failed on attempt {}: {}", event.taskId(), event.attemptNumber(), safeError);
 
             execution.setStatus(TaskStatus.FAILED);
+            execution.setOutputText(null);
+            execution.setOutputContentType(null);
             execution.setCompletedAt(Instant.now());
             execution.setErrorType(ex instanceof TaskExecutionException controlled
                     ? controlled.errorType() : ex.getClass().getName());

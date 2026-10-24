@@ -102,8 +102,9 @@ without another model call:
 ```
 
 Generated workflows use only the supported capability catalog. A business task
-name does not create an integration: HTTP needs an explicit URL and transform
-input is static. Parallelism is a fixed DAG, without schedules or dynamic fan-out. Human review remains
+name does not create an integration: HTTP needs an explicit URL. Transform input
+may be static JSON or the captured JSON output of one declared direct dependency.
+Parallelism is a fixed DAG, without schedules or dynamic fan-out. Human review remains
 necessary: a valid graph does not guarantee the requested business semantics.
 Authentication/tenant isolation and expired-proposal cleanup are deferred.
 Workflow optimization is advisory and read-only. Frontend AI and automatic optimization application are not implemented.
@@ -434,7 +435,7 @@ flowchart LR
 | NOOP | Orchestration and compatibility | Existing 50 ms simulation; no external work |
 | DELAY | Wait step | `durationMillis` 0–30,000; configurable lower ceiling |
 | HTTP_REQUEST | GET or POST | Total deadline ≤10 s, request body 16 KiB and response body 64 KiB by default; no redirects |
-| TRANSFORM | Static JSON_SELECT or JSON_RENAME | JSON object input 16 KiB by default; at most 50 simple top-level field names; no expressions |
+| TRANSFORM | JSON_SELECT or JSON_RENAME with static or direct dependency input | JSON object input 16 KiB by default; at most 50 simple top-level field names; no expressions |
 
 **Conductor does not execute arbitrary shell, code, JavaScript, Python or SQL.** No runtime plugin downloads are supported.
 
@@ -452,17 +453,47 @@ Example task definitions:
 ]
 ```
 
-JSON_RENAME uses `{"operation":"JSON_RENAME","input":"{\"customer_id\":42}","renames":{"customer_id":"customerId"}}`. Missing source fields and existing rename targets fail safely; fields are literal top-level names, not paths or scripts. Results are transient and bounded; the worker does not persist HTTP bodies or transform outputs.
+JSON_RENAME uses `{"operation":"JSON_RENAME","input":"{\"customer_id\":42}","renames":{"customer_id":"customerId"}}`. Missing source fields and existing rename targets fail safely; fields are literal top-level names, not paths or scripts. Successful transform results are bounded JSON outputs owned by their successful execution attempt.
 
-**Conductor currently orchestrates execution dependencies; generalized dataflow between arbitrary task outputs is not yet implemented.** The example's transform input is static and does not consume the HTTP response.
+The example above deliberately uses static transform input. For a dependency-backed pipeline, see the Task outputs and Dataflow sections below.
+
+### Task outputs
+
+V11 adds nullable `task_executions.output_text` and `output_content_type`; V1-V10 remain unchanged. Historical executions continue to have no output. Output belongs to a COMPLETE attempt, never mutable task state or a failed attempt. The worker validates UTF-8 bytes and commits output with the successful execution/task state before its after-commit completion event can release downstream tasks. Kafka events contain no output payload. Compose shares the configured limit across API, AI and workers through `TASK_OUTPUT_MAX_BYTES`.
+
+`conductor.tasks.output.max-bytes` defaults to 65,536 bytes (64 KiB), with the same hard database ceiling. Applications may configure a lower value. Oversized output fails rather than truncating. Only `application/json` and `text/plain` are supported; NOOP and DELAY produce no output. HTTP capture is explicitly opt-in through `captureResponseBody: true`; absent/false preserves bounded consumption and discard. A captured nonempty response must declare a supported UTF-8 content type. An empty captured response without a declared content type is stored as empty `text/plain`; an empty body is never a valid JSON object for TRANSFORM. Response headers, cookies and authorization values are not persisted.
+
+**Captured task outputs are persisted in Conductor's database and therefore must not contain secrets unless a future secret/data-classification system explicitly supports them.** There is no field encryption or secret vault integration. Outputs are not logged, included in metric tags, automatically exposed by normal run responses or sent to Ollama. Failure analysis, incident embeddings, Copilot, summaries and optimization remain output-blind.
+
+### Dataflow
+
+```mermaid
+flowchart LR
+    Fetch[HTTP GET with captureResponseBody true] -->|Bounded JSON output| Select[TRANSFORM JSON_SELECT]
+    Select -->|Bounded JSON output| Notify[HTTP POST bodyTaskId]
+```
+
+```json
+[
+  {"taskId":"fetch","name":"Fetch orders","type":"HTTP_REQUEST","config":{"method":"GET","url":"http://task-demo:8080/orders","timeoutMillis":2000,"captureResponseBody":true},"dependsOn":[],"maxRetries":2},
+  {"taskId":"select","name":"Select notification fields","type":"TRANSFORM","config":{"operation":"JSON_SELECT","inputTaskId":"fetch","fields":["id","email"]},"dependsOn":["fetch"],"maxRetries":0},
+  {"taskId":"notify","name":"Post selected fields","type":"HTTP_REQUEST","config":{"method":"POST","url":"http://task-demo:8080/notify","timeoutMillis":2000,"contentType":"application/json","bodyTaskId":"select"},"dependsOn":["select"],"maxRetries":2}
+]
+```
+
+**Conductor does not implement a general expression or variable language. Initial dataflow passes a bounded whole-task output from a declared direct dependency.** TRANSFORM requires exactly one of static `input` and `inputTaskId`. HTTP POST permits a static `body`, a `bodyTaskId`, or no body; it rejects both sources together. GET cannot consume a body reference. References cannot target ancestors that are not direct dependencies, siblings, other jobs, unknown tasks or the task itself. There is no JSONPath, interpolation, arithmetic, dynamic fan-out or script evaluation.
+
+Workers resolve one declared source from PostgreSQL after locking, require the upstream task and exactly one execution to be COMPLETE, and use only that successful attempt's output. Missing, ambiguous, oversized or incompatible output fails with a safe error without including its content. Persisted config remains declarative and unchanged. TRANSFORM accepts JSON objects only; referenced HTTP POST bodies require JSON output and `contentType: application/json`. The downstream transform input and HTTP request body limits remain independently enforced at 16 KiB by default, even when the stored source is within the 64 KiB output bound. A failed upstream task does not release its dependent task.
+
+AI generation may propose these explicit references using the application-owned catalog. Normal capability, reference and DAG validation still precede preview, human approval and separate execution. Runtime output content is never supplied to workflow generation or other AI features.
 
 ### HTTP network boundary
 
-Only HTTP(S), GET and POST are accepted. URLs cannot contain credentials, query strings or fragments; custom headers and authentication are unsupported. Bodies must not contain secrets: secret-management integration is not implemented. No response headers/bodies or underlying network exception details are persisted. Controlled failures include HTTP_STATUS_500, HTTP_TIMEOUT, HTTP_CONNECTION_FAILURE and HTTP_RESPONSE_TOO_LARGE.
+Only HTTP(S), GET and POST are accepted. URLs cannot contain credentials, query strings or fragments; custom headers and authentication are unsupported. Bodies must not contain secrets: secret-management integration is not implemented. Response bodies are persisted only when capture is enabled; response headers and underlying network exception details are never persisted. Controlled failures include HTTP_STATUS_500, HTTP_TIMEOUT, HTTP_CONNECTION_FAILURE and HTTP_RESPONSE_TOO_LARGE.
 
 Literal addresses are validated before persistence. At connection time, the reusable Apache client checks all resolved addresses and supplies those same addresses to its connection operator; there is no separate unguarded resolution. Default policy rejects loopback/private/ULA/shared address space. Metadata addresses (including mapped IPv4 and AWS IPv6), unspecified, link-local, multicast and selected reserved/translation/tunnel ranges remain blocked even with private opt-in. Redirects, automatic HTTP retries, cookies and decompression are disabled. Header count is limited to 64 and each header/status line to 8 KiB. A total task deadline bounds DNS/connect/read/slow-drip responses; an OS DNS lookup may outlive cancellation, with at most eight outstanding lookups per worker client. These application checks complement network egress controls; they cannot prove that every globally routable destination is trustworthy.
 
-Typed settings include `conductor.tasks.delay.max-duration`, `conductor.tasks.http.max-timeout`, `max-request-bytes`, `max-response-bytes`, `allow-private-addresses`, and `conductor.tasks.transform.max-input-bytes`. Startup validation enforces hard ceilings: delay 30 s, HTTP 10 s, request/input 64 KiB and response 1 MiB. Total serialized task config is capped at 64 KiB. Task deadlines fit within the existing 60 s Redis lease; database stalls and process crashes remain separate reliability concerns.
+Typed settings include `conductor.tasks.delay.max-duration`, `conductor.tasks.http.max-timeout`, `max-request-bytes`, `max-response-bytes`, `allow-private-addresses`, `conductor.tasks.transform.max-input-bytes`, and `conductor.tasks.output.max-bytes`. Startup validation enforces hard ceilings: delay 30 s, HTTP 10 s, request/input/output 64 KiB and consumed response 1 MiB. Captured persisted output must satisfy both the HTTP response limit and the output limit. Total serialized task config is capped at 64 KiB. Task deadlines fit within the existing 60 s Redis lease; database stalls and process crashes remain separate reliability concerns.
 
 ### Local capability demo
 
@@ -475,13 +506,22 @@ $env:TASK_HTTP_ALLOW_PRIVATE_ADDRESSES='true' # Demo only; default false
 python scripts/task-capabilities-smoke.py
 ```
 
+For the captured-output pipeline and successful retry evidence, restart the fixed fixture first, then run:
+
+```powershell
+.\scripts\compose.ps1 --profile demo restart task-demo
+python scripts/task-dataflow-smoke.py
+```
+
+This focused smoke test prints workflow/job/task IDs and statuses for legacy NOOP, static transform, default HTTP discard, captured JSON selection and POST, successful retry, missing output and blocked downstream failure. It verifies the actual notification payload through the fixture, without AI calls or database output inspection. The fixed `/retry-orders` fixture route returns HTTP 500 for its first two calls, then the same JSON as `/orders`; its lock-protected counter resets only when the fixture process restarts. There is no reset or arbitrary behavior endpoint.
+
 The local broker defaults to three partitions so both workers can consume. If an existing `task-queue` was auto-created with one partition, expand it without deleting messages:
 
 ```powershell
 .\scripts\compose.ps1 exec kafka kafka-topics --bootstrap-server kafka:29092 --alter --topic task-queue --partitions 3
 ```
 
-Use `scripts/conductor-demo.http` for mixed workflows, HTTP 500 retries/DLQ, analysis, incident retrieval, Copilot and summary requests. Internal task URLs use `http://task-demo:8080`; the fixture is also inspectable at `http://localhost:18080/health`. Private-address opt-in is applied consistently to API, AI and both workers. Models still require explicit local pulls from the Ollama setup section; no cloud API or API key is used. On CPU-only hosts, the documented AI deadline overrides may be needed. Dockerfile Gradle commands prefer IPv4 during build downloads to mitigate observed Podman/WSL build-download timeouts; runtime networking is unchanged.
+Use `scripts/conductor-demo.http` for mixed workflows, HTTP-output dataflow, HTTP 500 retries/DLQ, analysis, incident retrieval, Copilot and summary requests. Internal task URLs use `http://task-demo:8080`; the fixture is also inspectable at `http://localhost:18080/health`. After the dataflow run, `GET http://localhost:18080/last-notification` returns the last successfully posted bounded JSON payload, including only the selected `id` and `email`. This opt-in fixture stores one payload in memory for demo verification and does not log it. Private-address opt-in is applied consistently to API, AI and both workers. Models still require explicit local pulls from the Ollama setup section; no cloud API or API key is used. On CPU-only hosts, the documented AI deadline overrides may be needed. Dockerfile Gradle commands prefer IPv4 during build downloads to mitigate observed Podman/WSL build-download timeouts; runtime networking is unchanged.
 
 V8 adds `tasks.task_type` (default NOOP) and bounded `tasks.task_config_json` (default `{}`). V1–V7 are unchanged. Old template JSON and callers omitting type/config remain NOOP; supplied incompatible config is rejected. Kafka TaskEvent stays unchanged because workers load the authoritative configuration from PostgreSQL.
 

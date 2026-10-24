@@ -33,6 +33,7 @@ class TaskExecutorServiceTest {
     private TaskExecutionJpaRepository executionRepo;
     private TaskHandler taskHandler;
     private TaskConfigCodec codec;
+    private TaskOutputResolver outputResolver;
     private java.util.concurrent.ScheduledExecutorService retries;
     private RedissonClient redisson;
     private KafkaTemplate<String, Object> kafka;
@@ -48,6 +49,9 @@ class TaskExecutorServiceTest {
         executionRepo = mock(TaskExecutionJpaRepository.class);
         taskHandler = mock(TaskHandler.class);
         when(taskHandler.type()).thenReturn(TaskType.NOOP);
+        try { when(taskHandler.execute(any())).thenReturn(TaskExecutionResult.completed()); }
+        catch (Exception impossible) { throw new AssertionError(impossible); }
+        outputResolver = mock(TaskOutputResolver.class);
         codec = mock(TaskConfigCodec.class);
         when(codec.decode(any(), anyString())).thenReturn(new NoOpTaskConfig());
         retries = mock(java.util.concurrent.ScheduledExecutorService.class);
@@ -71,7 +75,7 @@ class TaskExecutorServiceTest {
         }).when(txTemplate).executeWithoutResult(any());
 
         service = new TaskExecutorService(
-            taskRepo, executionRepo, new TaskHandlerRegistry(java.util.List.of(taskHandler)), codec, redisson, kafka,
+            taskRepo, executionRepo, new TaskHandlerRegistry(java.util.List.of(taskHandler)), codec, outputResolver, TaskProperties.defaults(), redisson, kafka,
             retries,
             new SimpleMeterRegistry(), txTemplate
         );
@@ -79,6 +83,8 @@ class TaskExecutorServiceTest {
 
     private Task pendingTask() {
         Task task = new Task();
+        task.setId(taskId);
+        Job job = new Job(); job.setId(jobId); task.setJob(job);
         task.setStatus(TaskStatus.PENDING);
         task.setMaxRetries(3);
         task.setRetryCount(0);
@@ -222,5 +228,63 @@ class TaskExecutorServiceTest {
         } finally {
             TransactionSynchronizationManager.clearSynchronization();
         }
+    }
+
+    @Test void successfulOutputIsPersistedBeforeCompletionPublication() throws Exception {
+        when(taskRepo.findById(taskId)).thenReturn(Optional.of(pendingTask()));
+        when(taskHandler.execute(any())).thenReturn(new TaskExecutionResult("{\"id\":42}", "application/json"));
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.process(new TaskEvent(jobId, taskId, "capture", 0, 0));
+            var executions = ArgumentCaptor.forClass(TaskExecution.class);
+            verify(executionRepo, atLeastOnce()).save(executions.capture());
+            assertThat(executions.getValue().getStatus()).isEqualTo(TaskStatus.COMPLETE);
+            assertThat(executions.getValue().getOutputText()).isEqualTo("{\"id\":42}");
+            assertThat(executions.getValue().getOutputContentType()).isEqualTo("application/json");
+            verify(kafka, never()).send(anyString(), anyString(), any());
+            TransactionSynchronizationManager.getSynchronizations().forEach(sync -> sync.afterCommit());
+            verify(kafka).send(eq(TaskExecutorService.TASK_RESULTS_TOPIC), eq(taskId.toString()), any());
+        } finally { TransactionSynchronizationManager.clearSynchronization(); }
+    }
+
+    @Test void configuredPersistenceBoundaryRejectsOversizeWithoutOutputOrPayloadLeak() throws Exception {
+        var defaults = TaskProperties.defaults();
+        service = new TaskExecutorService(taskRepo, executionRepo, new TaskHandlerRegistry(java.util.List.of(taskHandler)),
+                codec, outputResolver, new TaskProperties(defaults.delay(), defaults.http(), defaults.transform(), new TaskProperties.Output(4)),
+                redisson, kafka, retries, new SimpleMeterRegistry(), txTemplate);
+        when(taskRepo.findById(taskId)).thenReturn(Optional.of(pendingTask()));
+        when(taskHandler.execute(any())).thenReturn(new TaskExecutionResult("sensitive-output", "text/plain"));
+        service.process(new TaskEvent(jobId, taskId, "capture", 0, 0));
+        var executions = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(executions.capture());
+        assertThat(executions.getValue().getStatus()).isEqualTo(TaskStatus.FAILED);
+        assertThat(executions.getValue().getErrorType()).isEqualTo("TASK_OUTPUT_TOO_LARGE");
+        assertThat(executions.getValue().getErrorMessage()).doesNotContain("sensitive-output");
+        assertThat(executions.getValue().getOutputText()).isNull();
+        assertThat(executions.getValue().getOutputContentType()).isNull();
+    }
+
+    @Test void failedTransformAttemptCannotExposeTheNextSuccessfulAttemptsOutput() throws Exception {
+        when(taskHandler.type()).thenReturn(TaskType.TRANSFORM);
+        service = new TaskExecutorService(taskRepo, executionRepo, new TaskHandlerRegistry(java.util.List.of(taskHandler)),
+                codec, outputResolver, TaskProperties.defaults(), redisson, kafka, retries, new SimpleMeterRegistry(), txTemplate);
+        var task = pendingTask();
+        task.setTaskType(TaskType.TRANSFORM);
+        when(taskRepo.findById(taskId)).thenReturn(Optional.of(task));
+        when(taskHandler.execute(any())).thenThrow(new TaskExecutionException("TRANSIENT_TRANSFORM_FAILURE", "Transient transform failure"))
+                .thenReturn(new TaskExecutionResult("{\"id\":42}", "application/json"));
+        service.process(new TaskEvent(jobId, taskId, "transform", 1, 0));
+        service.process(new TaskEvent(jobId, taskId, "transform", 1, 1));
+        var executions = ArgumentCaptor.forClass(TaskExecution.class);
+        verify(executionRepo, atLeastOnce()).save(executions.capture());
+        assertThat(executions.getAllValues().stream().filter(e -> e.getAttemptNumber() == 0))
+                .allSatisfy(e -> {
+                    assertThat(e.getStatus()).isEqualTo(TaskStatus.FAILED);
+                    assertThat(e.getOutputText()).isNull();
+                    assertThat(e.getOutputContentType()).isNull();
+                });
+        assertThat(executions.getValue().getAttemptNumber()).isEqualTo(1);
+        assertThat(executions.getValue().getStatus()).isEqualTo(TaskStatus.COMPLETE);
+        assertThat(executions.getValue().getOutputText()).isEqualTo("{\"id\":42}");
     }
 }

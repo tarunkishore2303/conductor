@@ -3,11 +3,17 @@ package com.loom.capability;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 @ConfigurationProperties("conductor.tasks")
-public record TaskProperties(@DefaultValue Delay delay, @DefaultValue Http http, @DefaultValue Transform transform) {
+public record TaskProperties(@DefaultValue Delay delay, @DefaultValue Http http, @DefaultValue Transform transform,
+        @DefaultValue Output output) {
+    public TaskProperties(Delay delay, Http http, Transform transform) {
+        this(delay, http, transform, new Output(TaskOutputLimits.MAX_BYTES));
+    }
+    @ConstructorBinding
     public TaskProperties {
-        if (delay == null || http == null || transform == null) throw new IllegalArgumentException("Task configuration groups are required");
+        if (delay == null || http == null || transform == null || output == null) throw new IllegalArgumentException("Task configuration groups are required");
     }
     public static TaskProperties defaults() { return new TaskProperties(new Delay(Duration.ofSeconds(30)),
             new Http(Duration.ofSeconds(10), 16384, 65536, false), new Transform(16384)); }
@@ -24,6 +30,12 @@ public record TaskProperties(@DefaultValue Delay delay, @DefaultValue Http http,
     }
     public record Transform(@DefaultValue("16384") int maxInputBytes) {
         public Transform { if (maxInputBytes < 1 || maxInputBytes > 65536) throw new IllegalArgumentException("Transform size limit exceeds supported bounds"); }
+    }
+    public record Output(@DefaultValue("65536") int maxBytes) {
+        public Output {
+            if (maxBytes < 1 || maxBytes > TaskOutputLimits.MAX_BYTES)
+                throw new IllegalArgumentException("Task output limit exceeds supported bounds");
+        }
     }
     private static void bounded(Duration duration, Duration max, String name) {
         if (duration == null || duration.isNegative() || duration.isZero() || duration.compareTo(max) > 0)

@@ -3,8 +3,8 @@ package com.loom.worker.service;
 import com.loom.capability.TaskType;
 
 /**
- * Implement this interface to plug in real task logic.
- * The default registry falls back to NoOpTaskHandler.
+ * Executes one registered capability and returns a bounded result.
+ * Unknown types are rejected; persistence, input resolution, retries and publication belong to the worker.
  */
 public interface TaskHandler {
     TaskType type();

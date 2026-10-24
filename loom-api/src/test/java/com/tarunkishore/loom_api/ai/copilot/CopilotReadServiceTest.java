@@ -3,6 +3,8 @@ package com.tarunkishore.loom_api.ai.copilot;
 import com.loom.common.model.*;
 import com.tarunkishore.loom_api.ai.FailureAnalysisService;
 import com.tarunkishore.loom_api.ai.SimilarIncidentService;
+import com.tarunkishore.loom_api.ai.summary.ExecutionSummaryContextService;
+import java.util.NoSuchElementException;
 import com.tarunkishore.loom_api.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -234,6 +236,35 @@ class CopilotReadServiceTest {
         assertThat(serialized).contains("HTTP_REQUEST").doesNotContain("private-endpoint", "sensitive-payload", "timeoutMillis", "\"config\"");
         failed.setTaskType(com.loom.capability.TaskType.HTTP_REQUEST);
         assertThat(reads.getTasks(jobId, true).tasks().getFirst().type()).isEqualTo(com.loom.capability.TaskType.HTTP_REQUEST);
+    }
+
+    @Test
+    void capturedOutputNeverEntersCopilotEvidenceOrSummaryFactsAndFingerprint() {
+        var success = attempt(completed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:02Z");
+        var failure = attempt(failed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:01Z");
+        when(evidence.findForJob(eq(jobId), any())).thenReturn(List.of(failure, success));
+        when(analyses.get(jobId)).thenThrow(new NoSuchElementException("no stored analysis"));
+        var mapper = JsonMapper.builder().build();
+        var summaries = new ExecutionSummaryContextService(reads, analyses, mapper);
+        var snapshotBefore = reads.readSnapshot(jobId);
+        var summaryBefore = summaries.collect(jobId);
+        var runBefore = reads.getRun(jobId);
+        var tasksBefore = reads.getTasks(jobId, false);
+        var attemptsBefore = reads.getTaskAttempts(jobId, completed.getId());
+        success.setOutputText("OUTPUT_PRIVATE_SENTINEL");
+        success.setOutputContentType("text/plain");
+        assertThat(reads.readSnapshot(jobId)).isEqualTo(snapshotBefore);
+        assertThat(reads.getRun(jobId)).isEqualTo(runBefore);
+        assertThat(reads.getTasks(jobId, false)).isEqualTo(tasksBefore);
+        assertThat(reads.getTaskAttempts(jobId, completed.getId())).isEqualTo(attemptsBefore);
+        var summaryAfter = summaries.collect(jobId);
+        assertThat(summaryAfter).isEqualTo(summaryBefore);
+        assertThat(summaryAfter.evidenceFingerprint()).isEqualTo(summaryBefore.evidenceFingerprint());
+        for (Object value : List.of(reads.readSnapshot(jobId), reads.getRun(jobId),
+                reads.getTasks(jobId, false), reads.getTaskAttempts(jobId, completed.getId()), summaryAfter)) {
+            assertThat(mapper.writeValueAsString(value))
+                    .doesNotContain("OUTPUT_PRIVATE_SENTINEL", "outputText", "outputContentType");
+        }
     }
 
 }

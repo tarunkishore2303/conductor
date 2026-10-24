@@ -82,6 +82,30 @@ class WorkflowGenerationServiceTest {
                 .isInstanceOf(AiOutputValidationException.class);
     }
 
+    @Test
+    void fakeModelGeneratesValidatedWholeOutputReferences() {
+        var proposal = dataflowProposal("fetch");
+        var service = new WorkflowGenerationService(prompt -> proposal, validator, properties, new SimpleMeterRegistry());
+        assertThat(service.generate("fetch, select and notify")).isEqualTo(proposal);
+    }
+
+    @Test
+    void rejectsModelReferenceOutsideDeclaredDirectDependencies() {
+        assertThatThrownBy(() -> validator.validate(dataflowProposal("notify")))
+                .isInstanceOf(AiOutputValidationException.class);
+    }
+
+    private GeneratedWorkflowProposal dataflowProposal(String transformSource) {
+        return new GeneratedWorkflowProposal("Pipeline", "Whole bounded output", List.of(
+                new GeneratedTaskProposal("fetch", "Fetch", "HTTP_REQUEST", List.of(), 1,
+                        new HttpRequestTaskConfig("GET", "https://example.test/orders", 1000, null, null, true, null)),
+                new GeneratedTaskProposal("select", "Select", "TRANSFORM", List.of("fetch"), 0,
+                        new TransformTaskConfig("JSON_SELECT", null, List.of("id"), java.util.Map.of(), transformSource)),
+                new GeneratedTaskProposal("notify", "Notify", "HTTP_REQUEST", List.of("select"), 1,
+                        new HttpRequestTaskConfig("POST", "https://example.test/notify", 1000,
+                                "application/json", null, false, "select"))));
+    }
+
     private static TaskCapabilityValidators capabilities() {
         var properties = TaskProperties.defaults();
         return new TaskCapabilityValidators(List.of(new NoOpTaskConfigValidator(),

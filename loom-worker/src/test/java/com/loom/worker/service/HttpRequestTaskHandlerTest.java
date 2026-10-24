@@ -24,6 +24,20 @@ class HttpRequestTaskHandlerTest {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/ok", exchange -> { exchange.sendResponseHeaders(200, 2); exchange.getResponseBody().write("ok".getBytes()); exchange.close(); });
+        server.createContext("/json", exchange -> {
+            byte[] body = "{\"id\":42}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
+            exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+        });
+        server.createContext("/empty", exchange -> { exchange.sendResponseHeaders(204, -1); exchange.close(); });
+        server.createContext("/html", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "text/html");
+            exchange.sendResponseHeaders(200, 4); exchange.getResponseBody().write("html".getBytes()); exchange.close();
+        });
+        server.createContext("/invalid-utf8", exchange -> {
+            exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=UTF-8");
+            exchange.sendResponseHeaders(200, 1); exchange.getResponseBody().write(255); exchange.close();
+        });
         server.createContext("/post", exchange -> {
             byte[] body = exchange.getRequestBody().readAllBytes();
             int code = exchange.getRequestMethod().equals("POST") && new String(body, StandardCharsets.UTF_8).equals("{\"ready\":true}") ? 200 : 400;
@@ -53,6 +67,49 @@ class HttpRequestTaskHandlerTest {
     @AfterEach void cleanup() throws Exception { handler.close(); server.stop(0); }
     @Test void getSuccessDiscardsBody() throws Exception { assertThat(run("GET", "/ok", null, 1000).output()).isNull(); }
     @Test void postJson() throws Exception { run("POST", "/post", "{\"ready\":true}", 1000); }
+    @Test void explicitCaptureReturnsTypedJson() throws Exception {
+        var result = capture("/json");
+        assertThat(result.output()).isEqualTo("{\"id\":42}");
+        assertThat(result.contentType()).isEqualTo("application/json");
+    }
+    @Test void emptyCaptureIsExplicitEmptyPlainText() throws Exception {
+        var result = capture("/empty");
+        assertThat(result.output()).isEmpty();
+        assertThat(result.contentType()).isEqualTo("text/plain");
+    }
+    @Test void unsupportedAndInvalidUtf8CaptureFailSafely() {
+        for (String path : List.of("/html", "/invalid-utf8"))
+            assertThatThrownBy(() -> capture(path)).isInstanceOfSatisfying(TaskExecutionException.class,
+                    failure -> assertThat(failure.errorType()).isEqualTo("INCOMPATIBLE_TASK_OUTPUT"));
+    }
+    @Test void captureStillRejectsAdvertisedAndChunkedOversizeAndHttpErrors() {
+        for (String path : List.of("/large", "/chunked", "/fail", "/missing", "/redirect"))
+            assertThatThrownBy(() -> capture(path)).isInstanceOf(TaskExecutionException.class);
+    }
+    @Test void dependencyBodyIsPostedWithoutChangingConfig() throws Exception {
+        var config = new HttpRequestTaskConfig("POST", base + "/post", 1000, "application/json", null, false, "prepare");
+        handler.execute(new TaskExecutionContext(null, config,
+                new ResolvedTaskInput("prepare", "{\"ready\":true}", "application/json")));
+        assertThat(config.body()).isNull();
+    }
+    @Test void resolvedBodyHasItsOwnRequestLimit() {
+        var config = new HttpRequestTaskConfig("POST", base + "/post", 1000, "application/json", null, false, "prepare");
+        assertThatThrownBy(() -> handler.execute(new TaskExecutionContext(null, config,
+                new ResolvedTaskInput("prepare", "x".repeat(16385), "application/json"))))
+                .isInstanceOfSatisfying(TaskExecutionException.class, failure -> assertThat(failure.errorType()).isEqualTo("HTTP_REQUEST_TOO_LARGE"));
+    }
+    @Test void configuredOutputLimitAppliesBeforeResultConstruction() throws Exception {
+        handler.close();
+        var defaults = properties(true);
+        handler = new HttpRequestTaskHandler(new TaskProperties(defaults.delay(), defaults.http(), defaults.transform(),
+                new TaskProperties.Output(4)), validators);
+        assertThatThrownBy(() -> capture("/json")).isInstanceOfSatisfying(TaskExecutionException.class,
+                failure -> assertThat(failure.errorType()).isEqualTo("TASK_OUTPUT_TOO_LARGE"));
+    }
+    private TaskExecutionResult capture(String path) throws Exception {
+        return handler.execute(new TaskExecutionContext(null,
+                new HttpRequestTaskConfig("GET", base + path, 1000, null, null, true, null)));
+    }
     @Test void timeout() { assertFailure("/slow", 30, "HTTP_TIMEOUT"); }
     @Test void totalDeadlineStopsSlowDrip() { assertFailure("/drip", 80, "HTTP_TIMEOUT"); }
     @Test void serverError() { assertFailure("/fail", 1000, "HTTP_STATUS_500"); }

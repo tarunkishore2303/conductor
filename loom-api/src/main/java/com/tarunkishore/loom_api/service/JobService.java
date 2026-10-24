@@ -1,6 +1,7 @@
 package com.tarunkishore.loom_api.service;
 
 import com.loom.capability.TaskCapabilityValidators;
+import com.loom.capability.TaskDataflowValidator;
 import com.loom.capability.TaskConfigCodec;
 import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
@@ -19,6 +20,8 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class JobService {
+    private final TaskDataflowValidator dataflowValidator = new TaskDataflowValidator();
+
 
     private final JobRepository jobRepository;
     private final TaskRepository taskRepository;
@@ -35,8 +38,10 @@ public class JobService {
 
     @Transactional
     public Job submit(JobSubmitRequest request, UUID workflowTemplateId) {
-        dagValidator.validate(request.tasks());
         request.tasks().forEach(task -> capabilityValidators.validate(task.type(), task.config()));
+        dataflowValidator.validate(request.tasks().stream().map(task ->
+                new TaskDataflowValidator.DataflowTask(task.taskId(), task.dependsOn(), task.config())).toList());
+        dagValidator.validate(request.tasks());
         meterRegistry.counter("loom.jobs.submitted",
             "failurePolicy", request.failurePolicy().name()).increment();
 

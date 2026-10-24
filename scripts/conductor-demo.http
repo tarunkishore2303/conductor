@@ -374,3 +374,105 @@ POST {{baseUrl}}/api/v1/ai/workflows/{{createOptimizationEmptyHistory.response.b
 
 ### Retrieve stored insufficient-history report
 GET {{baseUrl}}/api/v1/ai/workflows/{{createOptimizationEmptyHistory.response.body.$.id}}/optimization
+
+### Bounded whole-output dataflow: capture -> JSON_SELECT -> HTTP POST
+# Requires the demo profile and private-address opt-in. Outputs are persisted: use synthetic data only.
+# @name createDataflowWorkflow
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{
+  "name":"Captured orders to selected notification",
+  "tasks":[
+    {"taskId":"fetchOrders","name":"Capture orders JSON","type":"HTTP_REQUEST","config":{"method":"GET","url":"{{taskDemoUrl}}/orders","timeoutMillis":2000,"captureResponseBody":true},"dependsOn":[],"maxRetries":2},
+    {"taskId":"selectOrder","name":"Select id and email","type":"TRANSFORM","config":{"operation":"JSON_SELECT","inputTaskId":"fetchOrders","fields":["id","email"]},"dependsOn":["fetchOrders"],"maxRetries":0},
+    {"taskId":"notify","name":"Post selected JSON","type":"HTTP_REQUEST","config":{"method":"POST","url":"{{taskDemoUrl}}/notify","timeoutMillis":2000,"contentType":"application/json","bodyTaskId":"selectOrder"},"dependsOn":["selectOrder"],"maxRetries":2}
+  ]
+}
+
+### Execute dataflow separately
+# @name executeDataflowWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{createDataflowWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"Whole successful outputs through three real handlers"}
+
+### Wait for COMPLETE; ordinary response does not expose raw outputs
+GET {{baseUrl}}/api/v1/jobs/{{executeDataflowWorkflow.response.body.$.id}}
+
+### Fixture evidence: expect exactly id 42 and email demo@example.test, without internal/status/orders
+# Fixed demo-only endpoint; it holds the most recent successful notification in memory.
+GET http://localhost:18080/last-notification
+
+### Missing-output example: capture disabled by default, downstream must fail safely
+# @name createMissingOutputWorkflow
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{
+  "name":"Missing capture output fails deterministically",
+  "tasks":[
+    {"taskId":"discardResponse","name":"HTTP without capture","type":"HTTP_REQUEST","config":{"method":"GET","url":"{{taskDemoUrl}}/orders","timeoutMillis":2000},"dependsOn":[],"maxRetries":0},
+    {"taskId":"select","name":"Missing output is not invented","type":"TRANSFORM","config":{"operation":"JSON_SELECT","inputTaskId":"discardResponse","fields":["id"]},"dependsOn":["discardResponse"],"maxRetries":0}
+  ]
+}
+
+### Execute missing-output example
+# @name executeMissingOutputWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{createMissingOutputWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"Missing persisted output demonstration"}
+
+### Expect first task COMPLETE, second DEAD_LETTERED, job FAILED
+GET {{baseUrl}}/api/v1/jobs/{{executeMissingOutputWorkflow.response.body.$.id}}
+
+### Failed upstream never produces output or releases downstream
+# @name createFailedDataflowWorkflow
+POST {{baseUrl}}/api/v1/workflows
+Content-Type: application/json
+
+{
+  "name":"Failed upstream blocks dataflow",
+  "tasks":[
+    {"taskId":"fetch","name":"Controlled failing HTTP capture","type":"HTTP_REQUEST","config":{"method":"GET","url":"{{taskDemoUrl}}/fail","timeoutMillis":2000,"captureResponseBody":true},"dependsOn":[],"maxRetries":2},
+    {"taskId":"select","name":"Must not execute after upstream failure","type":"TRANSFORM","config":{"operation":"JSON_SELECT","inputTaskId":"fetch","fields":["id"]},"dependsOn":["fetch"],"maxRetries":0}
+  ]
+}
+
+### Separate failure execution
+# @name executeFailedDataflowWorkflow
+POST {{baseUrl}}/api/v1/workflows/{{createFailedDataflowWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"Upstream HTTP retry exhaustion blocks consumer"}
+
+### Expect attempts 0/1/2 on fetch, DLQ; select never executes
+GET {{baseUrl}}/api/v1/jobs/{{executeFailedDataflowWorkflow.response.body.$.id}}
+
+### AI proposes references, Java validates; still only a preview
+# @name generateDataflowWorkflow
+POST {{baseUrl}}/api/v1/ai/workflows/generate
+Content-Type: application/json
+
+{"prompt":"Create exactly three sequential tasks. fetchOrders: HTTP GET http://task-demo:8080/orders timeoutMillis 2000 captureResponseBody true. selectOrder: TRANSFORM JSON_SELECT id and email using inputTaskId fetchOrders, directly dependent on fetchOrders, no static input. notify: HTTP POST http://task-demo:8080/notify with contentType application/json and bodyTaskId selectOrder, directly dependent on selectOrder, timeoutMillis 2000, no static body. Use maxRetries 1. Do not execute anything."}
+
+### Inspect generated dataflow and validation before approval
+GET {{baseUrl}}/api/v1/ai/workflows/proposals/{{generateDataflowWorkflow.response.body.$.proposalId}}
+
+### Human approval persists workflow, not execution
+# @name approveDataflowWorkflow
+POST {{baseUrl}}/api/v1/ai/workflows/proposals/{{generateDataflowWorkflow.response.body.$.proposalId}}/approve
+Content-Type: application/json
+
+{}
+
+### Separate execution of approved dataflow
+# @name executeApprovedDataflow
+POST {{baseUrl}}/api/v1/workflows/{{approveDataflowWorkflow.response.body.$.id}}/jobs
+Content-Type: application/json
+
+{"name":"Approved AI dataflow through deterministic workers"}
+
+### Inspect actual approved execution
+GET {{baseUrl}}/api/v1/jobs/{{executeApprovedDataflow.response.body.$.id}}

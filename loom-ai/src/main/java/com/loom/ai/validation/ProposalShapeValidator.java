@@ -5,12 +5,14 @@ import com.loom.ai.exception.AiOutputValidationException;
 import com.loom.ai.model.GeneratedWorkflowProposal;
 import com.loom.capability.TaskCapabilityValidators;
 import com.loom.capability.TaskType;
+import com.loom.capability.TaskDataflowValidator;
 import org.springframework.stereotype.Component;
 
-/** Shape checks only; the API's existing DAG validator owns graph semantics. */
+/** Shape and declared dataflow checks; the API's existing DAG validator owns cycles and dependency semantics. */
 @Component
 public class ProposalShapeValidator {
     private final TaskCapabilityValidators capabilities;
+    private final TaskDataflowValidator dataflowValidator = new TaskDataflowValidator();
     public ProposalShapeValidator(TaskCapabilityValidators capabilities) { this.capabilities = capabilities; }
     public void validate(GeneratedWorkflowProposal proposal) {
         if (proposal == null) fail("AI returned an empty workflow.");
@@ -30,6 +32,14 @@ public class ProposalShapeValidator {
             if (task.maxRetries() == null || task.maxRetries() < 0 || task.maxRetries() > 5) fail("Task retries must be between 0 and 5.");
             if (task.dependencies() == null || task.dependencies().size() > 50) fail("Invalid task dependencies.");
             for (String dependency : task.dependencies()) text(dependency, 64, "dependency");
+        }
+        try {
+            if (proposal.tasks().stream().anyMatch(task -> TaskDataflowValidator.reference(task.config()) != null)) {
+                dataflowValidator.validate(proposal.tasks().stream().map(task ->
+                        new TaskDataflowValidator.DataflowTask(task.identifier(), task.dependencies(), task.config())).toList());
+            }
+        } catch (IllegalArgumentException invalid) {
+            fail("Invalid task dataflow: " + invalid.getMessage());
         }
     }
     private void text(String value, int max, String field) {

@@ -2,6 +2,7 @@ package com.tarunkishore.loom_api.ai.optimization;
 
 import com.tarunkishore.loom_api.ai.optimization.application.OptimizationContextService;
 import com.tarunkishore.loom_api.ai.optimization.config.OptimizationProperties;
+import com.tarunkishore.loom_api.ai.optimization.support.OptimizationContextFingerprint;
 
 import com.loom.capability.*;
 import com.loom.common.dto.TaskDefinition;
@@ -107,4 +108,17 @@ class OptimizationContextServiceTest {
         attempt.setErrorType("https://private.example/token");
         assertThat(service.collect(workflowId).runs().getFirst().tasks().getFirst().attempts().getFirst().errorType()).isEqualTo("UNCLASSIFIED_ERROR");
     }
+    @Test void capturedOutputChangesDoNotChangeOptimizationFactsOrFingerprint() {
+        var before = service.collect(workflowId);
+        var fingerprints = new OptimizationContextFingerprint();
+        String hash = fingerprints.fingerprint(before);
+        attempt.setOutputText("OUTPUT_PRIVATE_SENTINEL");
+        attempt.setOutputContentType("text/plain");
+        var after = service.collect(workflowId);
+        assertThat(after).isEqualTo(before);
+        assertThat(fingerprints.fingerprint(after)).isEqualTo(hash);
+        assertThat(mapper.writeValueAsString(after))
+                .doesNotContain("OUTPUT_PRIVATE_SENTINEL", "outputText", "outputContentType");
+    }
+
 }

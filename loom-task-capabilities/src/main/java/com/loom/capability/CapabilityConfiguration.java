@@ -13,5 +13,6 @@ public class CapabilityConfiguration {
     @Bean TransformTaskConfigValidator transformTaskConfigValidator(TaskProperties properties) { return new TransformTaskConfigValidator(properties); }
     @Bean TaskCapabilityValidators taskCapabilityValidators(List<TaskConfigValidator> validators) { return new TaskCapabilityValidators(validators); }
     @Bean TaskConfigCodec taskConfigCodec(TaskCapabilityValidators validators) { return new TaskConfigCodec(validators); }
+    @Bean TaskDataflowValidator taskDataflowValidator() { return new TaskDataflowValidator(); }
     @Bean TaskCapabilityCatalog taskCapabilityCatalog(TaskProperties properties) { return new TaskCapabilityCatalog(properties); }
 }
