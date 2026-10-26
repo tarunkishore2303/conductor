@@ -19,7 +19,7 @@ export function RunPage() {
             <div><p className="eyebrow">RUN / EXECUTION STATE</p><h1>{run.name}</h1><code className="muted">{run.id}</code></div>
             <div className="run-heading-status">
               <StatusBadge status={run.status} />
-              {isActiveRun(run.status) && !query.isError && <span className="refresh-indicator"><i aria-hidden="true" />Auto-refreshing · 2s</span>}
+              {isActiveRun(run.status) && <span className="refresh-indicator" role="status"><i aria-hidden="true" />{query.streamStatus === 'live' ? 'Live' : query.streamStatus === 'fallback' ? 'Fallback polling · 5s / reconnecting' : 'Connecting live updates…'}</span>}
               <button onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</button>
             </div>
           </header>

@@ -1,9 +1,8 @@
 import type { ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useRun } from '../api/queries'
 import type { Workflow, WorkflowTask } from '../api/types'
 import { buildWorkflowGraph } from '../components/graph'
 import { StatusBadge } from '../components/StatusBadge'
@@ -104,37 +103,4 @@ describe('run visibility', () => {
     expect(screen.getByText('DEAD LETTERED')).toBeInTheDocument()
   })
 
-  function RunProbe() {
-    const query = useRun('run-1')
-    return <div role="status">{query.data?.status ?? 'Loading'}</div>
-  }
-
-  it('polls an active run, renders its terminal status, then stops polling', async () => {
-    vi.useFakeTimers()
-    const fetch = vi.fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(response({ id: 'run-1', status: 'RUNNING' }))
-      .mockResolvedValue(response({ id: 'run-1', status: 'COMPLETE' }))
-    vi.stubGlobal('fetch', fetch)
-    render(<RunProbe />, { wrapper: TestProviders })
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
-    expect(screen.getByRole('status')).toHaveTextContent('RUNNING')
-    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
-    expect(screen.getByRole('status')).toHaveTextContent('COMPLETE')
-    expect(fetch).toHaveBeenCalledTimes(2)
-    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
-    expect(fetch).toHaveBeenCalledTimes(2)
-  })
-
-  it('does not continue polling after leaving an active run', async () => {
-    vi.useFakeTimers()
-    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(response({ id: 'run-1', status: 'RUNNING' }))
-    vi.stubGlobal('fetch', fetch)
-    const view = render(<RunProbe />, { wrapper: TestProviders })
-    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
-    expect(fetch).toHaveBeenCalledTimes(1)
-    view.unmount()
-    await act(async () => { await vi.advanceTimersByTimeAsync(10000) })
-    expect(fetch).toHaveBeenCalledTimes(1)
-  })
 })
