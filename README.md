@@ -22,6 +22,40 @@ and run intelligence at **http://localhost:3001**. Execution remains read-only.
 Stored intelligence and execution views work without Ollama; explicit generation
 uses the optional local AI profile.
 
+### Control Plane in action
+
+These screenshots come from real local executions captured on October 24–26,
+2026. IDs and timestamps are demo evidence; the images reflect the UI at capture
+time. The intelligence views below were captured with **Ollama stopped**, showing
+that persisted results and indexed incident retrieval remain available.
+
+**Workflow structure:** a read-only DAG showing typed capabilities, dependencies,
+parallel branches and a downstream join.
+
+![Workflow detail showing an HTTP, transform, parallel delay/notification, and NOOP join DAG](docs/screenshots/workflow-dag.png)
+
+<details>
+<summary>View live execution, execution summary, and failure intelligence</summary>
+
+**Live execution:** the run detail receives SSE invalidation hints and refreshes
+the authoritative REST snapshot. A running job may still show PENDING task records
+because the worker commits its task state at attempt completion.
+
+![Running workflow with Live SSE indicator, task states, and retry counters](docs/screenshots/live-run.png)
+
+**Execution summary:** deterministic counts and recorded timing remain separate
+from the stored local Ollama interpretation.
+
+![Completed run with Conductor summary facts alongside local Ollama interpretation](docs/screenshots/execution-summary.png)
+
+**Failure intelligence:** persisted attempt/DLQ evidence, model interpretation,
+and real historical incident links. Model confidence and similarity scores are
+not probabilities.
+
+![Failed run with retry evidence, separate model interpretation, and scored historical incidents](docs/screenshots/failure-intelligence.png)
+
+</details>
+
 ```powershell
 .\scripts\compose.ps1 up --build -d
 ```
