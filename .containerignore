@@ -2,6 +2,8 @@
 .gradle
 .local-delegation
 **/build
+**/node_modules
+**/dist
 .idea
 .vscode
 **/.env

@@ -10,9 +10,12 @@ import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.Job;
 import com.loom.common.model.WorkflowTemplate;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
+import com.tarunkishore.loom_api.dto.WorkflowTemplateResponse;
 import com.tarunkishore.loom_api.repository.WorkflowTemplateRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -51,6 +54,16 @@ public class WorkflowService {
         template.setDagDefinitionJson(dagJson);
         template.setDefaultFailurePolicy(request.defaultFailurePolicy());
         return templateRepo.save(template);
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkflowTemplateResponse> listTemplates(int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("Workflow list limit must be between 1 and 100.");
+        }
+        var page = PageRequest.of(0, limit, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")));
+        return templateRepo.findAllBy(page).stream()
+                .map(template -> WorkflowTemplateResponse.from(template, parseTasks(template))).toList();
     }
 
     @Transactional(readOnly = true)

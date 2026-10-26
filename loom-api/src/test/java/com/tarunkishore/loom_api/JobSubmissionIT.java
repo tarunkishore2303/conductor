@@ -6,6 +6,7 @@ import com.loom.common.dto.JobSubmitRequest;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.FailurePolicy;
 import com.tarunkishore.loom_api.dto.JobResponse;
+import com.tarunkishore.loom_api.dto.JobSummaryResponse;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateResponse;
 import com.tarunkishore.loom_api.repository.JobRepository;
@@ -79,6 +80,32 @@ class JobSubmissionIT {
             new TaskDefinition("C", "transform-right", List.of("A"), 2),
             new TaskDefinition("D", "merge",          List.of("B", "C"), 2)
         ), FailurePolicy.FAIL_FAST);
+    }
+
+    @Test
+    void recentRunListIsBoundedAndSortedWithoutLoadingTaskPayloads() {
+        restTemplate.postForEntity("/api/v1/jobs", diamondDag("list-runs-first"), JobResponse.class);
+        restTemplate.postForEntity("/api/v1/jobs", diamondDag("list-runs-second"), JobResponse.class);
+
+        var response = restTemplate.getForEntity("/api/v1/jobs?limit=2", JobSummaryResponse[].class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).hasSize(2);
+        assertThat(response.getBody()[0].createdAt()).isAfterOrEqualTo(response.getBody()[1].createdAt());
+        assertThat(restTemplate.getForEntity("/api/v1/jobs?limit=1", JobSummaryResponse[].class).getBody()).hasSize(1);
+        assertThat(restTemplate.getForEntity("/api/v1/jobs?limit=101", String.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void recentWorkflowListIsBoundedAndPreservesDagDefinitions() {
+        var definition = new WorkflowTemplateRequest("list-workflow", "Visible workflow", diamondDag("unused").tasks(), FailurePolicy.FAIL_FAST);
+        restTemplate.postForEntity("/api/v1/workflows", definition, WorkflowTemplateResponse.class);
+
+        var response = restTemplate.getForEntity("/api/v1/workflows?limit=1", WorkflowTemplateResponse[].class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).hasSize(1);
+        assertThat(response.getBody()[0].tasks()).hasSize(4);
+        assertThat(response.getBody()[0].tasks()).extracting(TaskDefinition::taskId).containsExactly("A", "B", "C", "D");
+        assertThat(restTemplate.getForEntity("/api/v1/workflows?limit=0", String.class).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     @Test

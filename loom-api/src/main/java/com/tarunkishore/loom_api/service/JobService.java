@@ -8,9 +8,12 @@ import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.*;
 import com.tarunkishore.loom_api.repository.JobRepository;
 import com.tarunkishore.loom_api.repository.TaskRepository;
+import com.tarunkishore.loom_api.dto.JobSummaryResponse;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -85,6 +88,15 @@ public class JobService {
             }
         });
         return saved;
+    }
+
+    @Transactional(readOnly = true)
+    public List<JobSummaryResponse> listJobs(int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("Run list limit must be between 1 and 100.");
+        }
+        var page = PageRequest.of(0, limit, Sort.by(Sort.Order.desc("createdAt"), Sort.Order.asc("id")));
+        return jobRepository.findAllBy(page).stream().map(JobSummaryResponse::from).toList();
     }
 
     @Transactional(readOnly = true)
