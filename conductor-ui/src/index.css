@@ -113,6 +113,42 @@ tbody tr:hover { background: #151f2b; }
 footer { display: flex; justify-content: space-between; border-top: 1px solid #252e3a; padding: 18px 36px; color: #8b9bb0; font-size: 10px; }
 footer span:first-child { font-family: Consolas, monospace; letter-spacing: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+.intel-section { margin-top: 38px; }
+.intel-heading { display: flex; justify-content: space-between; align-items: end; gap: 18px; margin-bottom: 20px; }
+.intel-heading h2 { font-size: 22px; }
+.intel-heading > p, .intel-note { font-size: 11px; color: #91a3bb; line-height: 1.8; }
+.intel-body { padding: 22px; }
+.intel-columns { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 28px; }
+.intel-columns h3 { margin: 0 0 18px; color: #c6dcf5; font-size: 13px; font-weight: 600; }
+.intel-columns h4 { margin: 20px 0 8px; font-size: 12px; font-weight: 500; color: #c5d2e4; }
+.intel-interpretation { border-left: 1px solid #344357; padding-left: 26px; }
+.intel-interpretation > p, .intel-list { font-size: 12px; color: #b2c0d3; line-height: 1.8; overflow-wrap: anywhere; }
+.intel-facts { margin: 0 0 15px; font-size: 11px; }
+.intel-facts > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid #263343; }
+.intel-facts dt { color: #91a3bb; }
+.intel-facts dd { margin: 0; color: #d3e1f3; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.intel-facts code { font-size: 10px; }
+.intel-list { padding-left: 20px; margin: 8px 0 18px; }
+.intel-list li { margin-bottom: 9px; }
+.intel-empty { margin: 14px 0; font-size: 12px; }
+.intel-empty button, .intel-body > button { margin-top: 14px; }
+.intel-error { border: 1px solid #6c3846; background: #291c24; padding: 14px 16px; margin: 18px 0 0; border-radius: 6px; font-size: 12px; }
+.intel-error button { margin-top: 12px; }
+.intel-metadata { display: flex; gap: 16px; flex-wrap: wrap; border-top: 1px solid #2b394b; padding-top: 16px; margin-top: 22px; color: #91a3bb; font-size: 10px; }
+.intel-metadata code { font-size: 10px; overflow-wrap: anywhere; }
+.intel-task { margin-bottom: 24px; }
+.intel-task table td, .intel-task table th { padding: 9px 10px; font-size: 10px; }
+.intel-retry { display: block; margin-top: 4px; color: #b8c8dc; }
+.intel-limits { font-size: 11px; color: #91a3bb; margin-top: 16px; }
+.intel-limits summary { cursor: pointer; }
+.intel-limits li { margin-top: 7px; }
+.intel-matches { display: grid; gap: 14px; margin-top: 20px; }
+.intel-match { border: 1px solid #344357; background: #141e2b; border-radius: 7px; padding: 16px; }
+.intel-match-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.intel-match-heading h3 { font-size: 13px; font-weight: 500; margin: 0; }
+.intel-match .intel-facts { margin-bottom: 0; }
+@media (max-width: 1050px) { .intel-columns { grid-template-columns: 1fr; } .intel-interpretation { padding: 20px 0 0; border-left: 0; border-top: 1px solid #344357; } }
+@media (max-width: 700px) { .intel-heading { align-items: start; flex-direction: column; } .intel-body { padding: 16px; } .intel-facts > div { flex-direction: column; gap: 4px; } .intel-facts dd { text-align: left; } }
 @media (max-width: 1050px) {
   .sidebar { width: 180px; padding: 24px 12px; }
   .topbar { padding: 0 24px; }

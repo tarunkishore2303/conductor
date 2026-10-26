@@ -4,6 +4,7 @@ import { isActiveRun } from '../api/runs'
 import { ResourceState } from '../components/ResourceState'
 import { formatTime } from '../api/time'
 import { StatusBadge } from '../components/StatusBadge'
+import { IntelligenceSection } from '../components/intelligence/IntelligenceSection'
 
 export function RunPage() {
   const { jobId = '' } = useParams()
@@ -52,7 +53,8 @@ export function RunPage() {
             </div>
             {!run.tasks.length && <div className="resource-state">No tasks recorded.</div>}
           </section>
-          <p className="footnote">Timestamps show record creation and last state updates, not active attempt duration. Attempt history and task outputs are not exposed in this view.</p>
+          <p className="footnote">Timestamps show record creation and last state updates, not active attempt duration. Stored failure analysis below may include attempt evidence; task outputs are not displayed.</p>
+          <IntelligenceSection key={run.id} run={run} />
         </>
       )}
     </>
