@@ -17,8 +17,44 @@ Submit a DAG of tasks via REST. Loom validates the graph, persists it, and execu
 
 ## Control Plane
 
-The read-only React/TypeScript/Vite MVP exposes real workflow definitions and run
-state at **http://localhost:3001**. No Ollama models are required.
+The React/TypeScript/Vite Control Plane exposes workflow definitions, run state,
+and run intelligence at **http://localhost:3001**. Execution remains read-only.
+Stored intelligence and execution views work without Ollama; explicit generation
+uses the optional local AI profile.
+
+### Control Plane in action
+
+These screenshots come from real local executions captured on October 24–26,
+2026. IDs and timestamps are demo evidence; the images reflect the UI at capture
+time. The intelligence views below were captured with **Ollama stopped**, showing
+that persisted results and indexed incident retrieval remain available.
+
+**Workflow structure:** a read-only DAG showing typed capabilities, dependencies,
+parallel branches and a downstream join.
+
+![Workflow detail showing an HTTP, transform, parallel delay/notification, and NOOP join DAG](docs/screenshots/workflow-dag.png)
+
+<details>
+<summary>View live execution, execution summary, and failure intelligence</summary>
+
+**Live execution:** the run detail receives SSE invalidation hints and refreshes
+the authoritative REST snapshot. A running job may still show PENDING task records
+because the worker commits its task state at attempt completion.
+
+![Running workflow with Live SSE indicator, task states, and retry counters](docs/screenshots/live-run.png)
+
+**Execution summary:** deterministic counts and recorded timing remain separate
+from the stored local Ollama interpretation.
+
+![Completed run with Conductor summary facts alongside local Ollama interpretation](docs/screenshots/execution-summary.png)
+
+**Failure intelligence:** persisted attempt/DLQ evidence, model interpretation,
+and real historical incident links. Model confidence and similarity scores are
+not probabilities.
+
+![Failed run with retry evidence, separate model interpretation, and scored historical incidents](docs/screenshots/failure-intelligence.png)
+
+</details>
 
 ```powershell
 .\scripts\compose.ps1 up --build -d
@@ -60,14 +96,49 @@ The default `VITE_API_BASE_URL=/api/v1` works through both proxies. The API itse
 is available at http://localhost:8080. Never put a Compose hostname in a browser
 URL: only nginx resolves `loom-api`. No CORS changes are needed. A custom absolute
 `VITE_API_BASE_URL` requires the target API's explicit CORS policy; it is a build-time
-setting, not an nginx runtime setting. The nginx API proxy accepts GET/HEAD only.
+setting, not an nginx runtime setting. The nginx API proxy accepts GET/HEAD,
+with only the two intelligence-generation POST exceptions documented below.
+If the API container is recreated separately, restart the UI container to refresh
+nginx's upstream hostname resolution (`.\scripts\compose.ps1 restart conductor-ui`).
 
 New bounded reads: `GET /api/v1/workflows?limit=50` and
 `GET /api/v1/jobs?limit=50` (limits 1–100, newest first). Existing detail APIs are
 unchanged. Run lists omit task payloads; normal UI views never render task outputs
 or capability configuration. This is an unauthenticated local MVP: no editor,
-execution buttons, AI pages, attempt history, runtime DAG, or authentication.
+execution buttons, Copilot/optimization UI, attempt history, runtime DAG, or authentication.
 The UI port binds to loopback.
+
+### Run Intelligence
+
+Run detail keeps deterministic execution state first, followed by three panels:
+Execution Summary, Failure Analysis and Similar Incidents. Each snapshot separates
+**facts = Conductor** from **interpretation = local Ollama**. Model confidence is
+an assessment, not a calibrated probability. Incident similarity is a retrieval
+score, not a probability; cards link to actual historical runs.
+
+Summary and failure panels first GET stored snapshots. Only an explicit Generate
+summary / Analyze failure action invokes POST; opening a page never generates
+content. Summaries support settled COMPLETE/FAILED runs; failure generation is for
+settled FAILED runs. The API remains authoritative for attempt-settlement checks.
+Requests are disabled while pending and successful results update only their
+snapshot cache. Intelligence is never polled or included in execution SSE.
+
+Find similar incidents explicitly calls the existing stored-vector GET, without
+Ollama inference or new embeddings. It requires a stored, fully indexed analysis.
+If indexing is absent, the UI explains the existing API prerequisite; it does not
+add an indexing or synthesis action. Empty matches are distinct from retrieval
+errors. Stored summaries, analyses and indexed retrieval remain accessible during
+Ollama outages without an AI-health check. New generation then shows a safe local
+AI unavailable message.
+
+Only these POST paths are allowed through nginx, with UUID-scoped routes:
+`/api/v1/ai/runs/{jobId}/summary` and
+`/api/v1/ai/runs/{jobId}/analyze-failure`. They compute/store intelligence; they
+never execute workflows. Job/workflow creation, proposal approval, indexing,
+synthesis, DELETE, PUT and PATCH remain blocked by the UI proxy. The Vite dev
+proxy is a development convenience, not this production method restriction.
+No task outputs, configuration, prompts, vector values or raw error messages are
+rendered. Next: Copilot and Workflow Optimization UI in a separate PR.
 
 ### Live execution updates
 

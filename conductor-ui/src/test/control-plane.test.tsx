@@ -81,12 +81,15 @@ describe('workflow dependency visualization', () => {
 
 describe('run visibility', () => {
   it('renders a failed run with task capability, retry counters, and truthful timestamp labels', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({
+    const run = {
       id: 'run-1', name: 'Failed notification', status: 'FAILED', failurePolicy: 'FAIL_FAST',
       createdAt: '2026-10-24T10:00:00Z', updatedAt: '2026-10-24T10:00:04Z',
       tasks: [{ id: 'task-1', name: 'Notify', type: 'HTTP_REQUEST', status: 'DEAD_LETTERED',
         retryCount: 2, maxRetries: 2, createdAt: '2026-10-24T10:00:00Z', updatedAt: '2026-10-24T10:00:04Z' }],
-    })))
+    }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => Promise.resolve(
+      url.includes('/ai/') ? response({}, 404) : response(run),
+    )))
     render(<Routes><Route path="/runs/:jobId" element={<RunPage />} /></Routes>, { wrapper: TestProviders })
     expect(await screen.findByRole('heading', { name: 'Failed notification' })).toBeInTheDocument()
     expect(screen.getByText('FAILED')).toBeInTheDocument()

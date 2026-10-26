@@ -18,7 +18,7 @@ export default function App() {
           <NavLink to="/runs"><span aria-hidden="true">▤</span>Runs</NavLink>
         </nav>
         <div className="sidebar-bottom">
-          <span className="read-only">READ-ONLY MVP</span>
+          <span className="read-only">EXECUTION READ ONLY</span>
           <p>Visibility into your distributed workflow engine.</p>
         </div>
       </aside>
