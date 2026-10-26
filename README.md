@@ -39,15 +39,21 @@ Routes: `/workflows`, `/workflows/:workflowId`, `/runs`, `/runs/:jobId`.
 Workflow details include a read-only, automatically laid-out dependency graph.
 Run details show task status, capability, retry counters/limits, and record
 created/updated timestamps. These timestamps are **not active attempt durations**.
-Active runs (`CREATED`, `RUNNING`, `CANCELLING`) refresh every two seconds while
-visible; polling stops at terminal state, on navigation, or on request error
-(explicit retry is available). Lists have manual refresh and show up to 50 items.
+Active runs (`CREATED`, `RUNNING`, `CANCELLING`) fetch an initial REST snapshot,
+then open `GET /api/v1/jobs/{jobId}/events` using browser EventSource. Known SSE
+notifications coalesce into REST snapshot refreshes; healthy streams do not poll.
+The page shows Live, Connecting, or Fallback polling. EventSource reconnects
+natively, and every open refetches REST to recover missed changes. Errors or
+unavailable EventSource enable five-second polling while active; reconnecting
+successfully disables it. Terminal REST state and navigation close the stream.
+Lists retain manual refresh and show up to 50 items.
 
 ```mermaid
 flowchart LR
     Browser --> UI[React Control Plane]
     UI -->|same-origin REST /api| Proxy[Vite dev proxy / nginx]
     Proxy --> API[loom-api]
+    API -->|SSE invalidation hints| UI
 ```
 
 The default `VITE_API_BASE_URL=/api/v1` works through both proxies. The API itself
@@ -60,8 +66,48 @@ New bounded reads: `GET /api/v1/workflows?limit=50` and
 `GET /api/v1/jobs?limit=50` (limits 1–100, newest first). Existing detail APIs are
 unchanged. Run lists omit task payloads; normal UI views never render task outputs
 or capability configuration. This is an unauthenticated local MVP: no editor,
-execution buttons, AI pages, attempt history, runtime DAG, SSE, or authentication.
-The UI port binds to loopback. Next: SSE live execution updates.
+execution buttons, AI pages, attempt history, runtime DAG, or authentication.
+The UI port binds to loopback.
+
+### Live execution updates
+
+**REST is the source of truth; SSE is live invalidation, not a second execution
+state store.** Events contain only IDs, committed statuses, timestamps and retry
+counters. They never contain task output, configuration, names, raw errors or AI
+responses. The event endpoint verifies job existence (404 if missing); an already
+terminal job receives a terminal hint and the connection closes.
+
+The API, scheduler and workers are separate Compose processes. Java callbacks
+cannot reach the API's in-memory clients directly, and the existing Kafka result
+contract does not cover starts/retries/job completion. Rather than create another
+distributed message path, the API observes committed metadata for subscribed runs
+once per second in one bounded query shared by their subscribers. No subscriptions
+means no observation queries. This moves change detection server-side; it does
+**not** remove database observation or introduce a durable event log. A fresh
+read-only transaction sees only committed data, so a subsequent REST refetch can
+read the observed commit. Execution transactions and Kafka contracts are unchanged.
+
+Supported named hints: `JOB_STARTED`, `JOB_CANCELLING`, `JOB_COMPLETED`,
+`JOB_FAILED`, `JOB_CANCELLED`, `TASK_STARTED`, `TASK_COMPLETED`,
+`TASK_RETRY_SCHEDULED`, `TASK_FAILED`, `TASK_DEAD_LETTERED`, `TASK_CANCELLED`.
+Only observed transitions are emitted. In particular, workers currently set
+RUNNING and final task state in one transaction: ordinary executions do not expose
+a committed TASK_STARTED transition. Retry hints use persisted retry scheduling
+evidence, not guessed delays. Short-lived states may be missed between observations.
+
+The process-local registry defaults to 100 clients, 50 runs, 100 tasks per run,
+15-second comment heartbeats and five-minute connections. Settings live under
+`conductor.run-stream` (`max-connections`, `max-runs`, `max-tasks-per-run`,
+`observation-interval-millis`, `heartbeat-millis`, `timeout-millis`) and are validated
+at startup. Slow/disconnected clients are removed; capacity limits return 503.
+nginx disables buffering/cache and uses a dedicated timeout only for SSE requests.
+
+Registry state and event IDs are process-local. There is no durable replay, event
+history or cross-replica publisher. Each API replica would independently observe
+the shared database, multiplying observation work; this is not a shared fan-out
+design. Reconnection always recovers through REST and ignores replay cursors.
+No WebSockets, AI streaming, new topics, migrations, Redis pub/sub or authentication
+are introduced. Next: Control Plane intelligence views, in a separate PR.
 
 ## AI Workflow Generation
 

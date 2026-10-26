@@ -58,7 +58,7 @@ public class RunEventStream {
     }
 
     public SseEmitter subscribe(UUID jobId) {
-        // Read before allocating any connection; unknown jobs reliably return404.
+        // Read before allocating any connection; unknown jobs reliably return 404.
         var state = reader.read(List.of(jobId)).get(jobId);
         if (state == null) throw new NoSuchElementException("Run not found");
         var emitter = newEmitter();
