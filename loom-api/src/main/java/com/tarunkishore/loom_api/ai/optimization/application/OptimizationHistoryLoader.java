@@ -50,7 +50,8 @@ final class OptimizationHistoryLoader {
         var attempts = evidence.findOptimizationAttempts(ids, PageRequest.of(0, properties.maxAttempts() + 1));
         if (attempts.size() > properties.maxAttempts()) throw new AiOutputException("Optimization attempt history exceeds bounds");
         var taskGroups = taskRows.stream().collect(Collectors.groupingBy(t -> t.getJob().getId()));
-        var attemptsByTask = attempts.stream().collect(Collectors.groupingBy(e -> e.getTask().getId()));
+        var attemptsByTask = attempts.stream()
+                .filter(e -> e.getExecutionGeneration() == e.getTask().getExecutionGeneration()).collect(Collectors.groupingBy(e -> e.getTask().getId()));
         var taskById = taskRows.stream().collect(Collectors.toMap(Task::getId, t -> t));
         var dependencies = new HashMap<UUID, Set<String>>();
         for (var edge : edges) {

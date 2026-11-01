@@ -22,7 +22,8 @@ public final class OperationMetrics {
         COPILOT("copilot", "ai.copilot.requests", "ai.copilot.failures", "ai.copilot.duration"),
         SUMMARY("summary", "ai.summary.requests", "ai.summary.failures", "ai.summary.duration"),
         INCIDENT_SEARCH("incident_search", "ai.incident.search.requests", "ai.incident.search.failures", "ai.incident.search.duration"),
-        TASK_HANDLER("task_handler", "task.handler.requests", "task.handler.failures", "task.handler.duration");
+        TASK_HANDLER("task_handler", "task.handler.requests", "task.handler.failures", "task.handler.duration"),
+        OUTBOX_PUBLISH("outbox_publish", "conductor.outbox.publish.requests", "conductor.outbox.publish.failure", "conductor.outbox.publish.latency");
 
         final String operation, requests, failures, duration;
         final boolean operationTag;

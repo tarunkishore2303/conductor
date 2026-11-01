@@ -4,6 +4,7 @@ import com.loom.capability.TaskCapabilityValidators;
 import com.loom.capability.TaskDataflowValidator;
 import com.loom.capability.TaskConfigCodec;
 import com.loom.common.dto.JobSubmitRequest;
+import com.loom.common.outbox.JdbcOutboxWriter;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.model.*;
 import com.tarunkishore.loom_api.repository.JobRepository;
@@ -15,8 +16,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.*;
 
@@ -29,7 +28,7 @@ public class JobService {
     private final JobRepository jobRepository;
     private final TaskRepository taskRepository;
     private final DAGValidator dagValidator;
-    private final JobEventPublisher eventPublisher;
+    private final JdbcOutboxWriter outbox;
     private final MeterRegistry meterRegistry;
     private final TaskCapabilityValidators capabilityValidators;
     private final TaskConfigCodec taskConfigCodec;
@@ -79,14 +78,7 @@ public class JobService {
         }
 
         Job saved = jobRepository.save(job);
-        UUID savedId = saved.getId();
-        // Publish after DB commit so scheduler sees persisted data
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                eventPublisher.publishJobCreated(savedId);
-            }
-        });
+        outbox.jobCreated(saved.getId());
         return saved;
     }
 
@@ -107,12 +99,14 @@ public class JobService {
 
     @Transactional
     public Job cancel(UUID jobId) {
-        Job job = jobRepository.findByIdWithTasks(jobId)
+        Job job = jobRepository.findByIdForUpdate(jobId)
             .orElseThrow(() -> new NoSuchElementException("Job not found: " + jobId));
         if (job.getStatus() == JobStatus.COMPLETE || job.getStatus() == JobStatus.CANCELLED) {
             throw new IllegalStateException("Job already in terminal state: " + job.getStatus());
         }
         job.setStatus(JobStatus.CANCELLING);
+        // Preserve the existing cancellation response shape outside the service transaction.
+        job.getTasks().size();
         return jobRepository.save(job);
     }
 }

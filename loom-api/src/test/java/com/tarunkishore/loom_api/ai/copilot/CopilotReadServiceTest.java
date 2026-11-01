@@ -267,4 +267,38 @@ class CopilotReadServiceTest {
         }
     }
 
+    @Test
+    void replayEvidenceAndSummaryCountCurrentGenerationWithoutDuplicateAttemptZero() {
+        failed.setExecutionGeneration(1);
+        var previous = attempt(failed, 0, "2026-10-07T09:59:00Z", "2026-10-07T09:59:01Z");
+        var currentZero = attempt(failed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:01Z");
+        currentZero.setExecutionGeneration(1);
+        var currentOne = attempt(failed, 1, "2026-10-07T10:00:03Z", "2026-10-07T10:00:04Z");
+        currentOne.setExecutionGeneration(1);
+        var success = attempt(completed, 0, "2026-10-07T10:00:00Z", "2026-10-07T10:00:02Z");
+        when(evidence.findForJob(eq(jobId), any())).thenReturn(List.of(previous, currentZero, currentOne, success));
+        when(analyses.get(jobId)).thenThrow(new NoSuchElementException("no stored analysis"));
+        var facts = reads.getRun(jobId);
+        assertThat(facts.recordedAttempts()).isEqualTo(3);
+        assertThat(facts.recordedRetries()).isEqualTo(1);
+        assertThat(facts.retryHistoryComplete()).isTrue();
+        assertThat(facts.aggregateRecordedTaskDurationMillis()).isEqualTo(4000);
+        assertThat(facts.unavailableEvidence()).anyMatch(note -> note.contains("current execution generation 1"));
+        assertThat(reads.getTasks(jobId, false).unavailableEvidence()).anyMatch(note -> note.contains("prior replay generations are excluded"));
+        assertThat(reads.getTaskAttempts(jobId, failed.getId()).attempts()).hasSize(2);
+        var summary = new ExecutionSummaryContextService(reads, analyses, JsonMapper.builder().build()).collect(jobId);
+        assertThat(summary.totalRecordedAttempts()).isEqualTo(3);
+        assertThat(summary.recordedRetries()).isEqualTo(1);
+        assertThat(summary.retryHistoryComplete()).isTrue();
+        assertThat(summary.unavailableEvidence()).anyMatch(note -> note.contains("current execution generation 1"));
+    }
+
+    @Test
+    void generationZeroFactsKeepTheirExistingSerializedShape() {
+        var mapper = JsonMapper.builder().build();
+        assertThat(mapper.writeValueAsString(reads.getTasks(jobId, false)))
+                .doesNotContain("unavailableEvidence", "executionGeneration", "generation");
+        assertThat(reads.readSnapshot(jobId).unavailableEvidence()).noneMatch(note -> note.contains("generation"));
+    }
+
 }

@@ -3,6 +3,7 @@ package com.tarunkishore.loom_api.ai.optimization;
 import com.tarunkishore.loom_api.ai.optimization.application.OptimizationContextService;
 import com.tarunkishore.loom_api.ai.optimization.config.OptimizationProperties;
 import com.tarunkishore.loom_api.ai.optimization.support.OptimizationContextFingerprint;
+import com.tarunkishore.loom_api.ai.optimization.support.OptimizationMetrics;
 
 import com.loom.capability.*;
 import com.loom.common.dto.TaskDefinition;
@@ -119,6 +120,23 @@ class OptimizationContextServiceTest {
         assertThat(fingerprints.fingerprint(after)).isEqualTo(hash);
         assertThat(mapper.writeValueAsString(after))
                 .doesNotContain("OUTPUT_PRIVATE_SENTINEL", "outputText", "outputContentType");
+    }
+
+    @Test void replayUsesCurrentAttemptSequenceAndReportsGenerationScope() {
+        var previous = new TaskExecution();
+        previous.setId(UUID.randomUUID()); previous.setTask(task); previous.setAttemptNumber(0);
+        previous.setStatus(TaskStatus.FAILED); previous.setExecutionGeneration(0);
+        previous.setStartedAt(job.getCreatedAt().minusSeconds(30));
+        previous.setCompletedAt(job.getCreatedAt().minusSeconds(20));
+        task.setExecutionGeneration(1); attempt.setExecutionGeneration(1);
+        when(evidence.findOptimizationAttempts(anyList(),any())).thenReturn(List.of(previous,attempt));
+        var context = service.collect(workflowId);
+        var facts = context.runs().getFirst().tasks().getFirst();
+        assertThat(facts.attempts()).hasSize(1);
+        assertThat(facts.attempts().getFirst().status()).isEqualTo("COMPLETE");
+        assertThat(OptimizationMetrics.completeAttempts(facts)).isTrue();
+        assertThat(context.limitations()).anyMatch(note -> note.contains("current execution generation 1")
+                && note.contains("prior replay generations are excluded"));
     }
 
 }

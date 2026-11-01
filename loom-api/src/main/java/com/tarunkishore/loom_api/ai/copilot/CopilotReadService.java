@@ -1,6 +1,7 @@
 package com.tarunkishore.loom_api.ai.copilot;
 
 import com.loom.common.dto.TaskDefinition;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.loom.capability.TaskType;
 import com.loom.common.model.Job;
 import com.loom.common.model.Task;
@@ -68,7 +69,7 @@ public class CopilotReadService {
         var timing = observedTiming(job, attempts);
         return new RunFacts(job.getId(), safe(job.getName()), job.getStatus().name(),
                 job.getCreatedAt(), job.getUpdatedAt(), states, attempts.size(), retries, completeHistory, first, last, span,
-                timing.totalMillis(), timing.slowestTasks(), timing.complete(), evidenceNotes(attempts));
+                timing.totalMillis(), timing.slowestTasks(), timing.complete(), evidenceNotes(job, attempts));
     }
 
     @Transactional(readOnly = true)
@@ -80,7 +81,7 @@ public class CopilotReadService {
                         t.getDeadLetteredAt(), executions.stream().filter(e -> t.getId().equals(e.getTask().getId()))
                                 .map(CopilotReadService::attemptFact).toList())).toList();
         return new RunSnapshot(job.getId(), safe(job.getName()), job.getStatus().name(),
-                job.getCreatedAt(), job.getUpdatedAt(), tasks, evidenceNotes(executions));
+                job.getCreatedAt(), job.getUpdatedAt(), tasks, evidenceNotes(job, executions));
     }
 
     @Transactional(readOnly = true)
@@ -97,7 +98,7 @@ public class CopilotReadService {
                                 .filter(attempt -> t.getId().equals(attempt.getTask().getId()))
                                 .filter(attempt -> attempt.getAttemptNumber() != null && attempt.getAttemptNumber() > 0)
                                 .count(), retryHistoryComplete, t.getTaskType())).toList();
-        return new TaskFacts(job.getId(), tasks);
+        return new TaskFacts(job.getId(), tasks, replayNotes(job));
     }
 
     @Transactional(readOnly = true)
@@ -109,7 +110,7 @@ public class CopilotReadService {
         var recorded = attempts(jobId).stream().filter(e -> taskId.equals(e.getTask().getId())).toList();
         var mapped = recorded.stream().map(CopilotReadService::attemptFact).toList();
         return new TaskAttemptFacts(jobId, taskId, safe(task.getName()), task.getStatus().name(),
-                task.getDeadLetteredAt(), mapped, evidenceNotes(recorded));
+                task.getDeadLetteredAt(), mapped, evidenceNotes(job, recorded));
     }
 
     public FailureAnalysisService.Analysis getFailureAnalysis(UUID jobId, UUID analysisId) {
@@ -161,10 +162,11 @@ public class CopilotReadService {
     private List<TaskExecution> attempts(UUID jobId) {
         var attempts = evidence.findForJob(jobId, PageRequest.of(0, 301));
         if (attempts.size() > 300) throw new ToolReadException("CONTEXT_LIMIT", "Run has more than 300 attempts");
-        return attempts;
+        return attempts.stream()
+                .filter(e -> e.getExecutionGeneration() == e.getTask().getExecutionGeneration()).toList();
     }
 
-    private static List<String> evidenceNotes(List<TaskExecution> attempts) {
+    private static List<String> evidenceNotes(Job job, List<TaskExecution> attempts) {
         var notes = new java.util.ArrayList<String>();
         notes.add("Recorded retries count persisted non-null attempt numbers greater than zero; missing or legacy attempts prevent an exact total.");
         notes.add("Observed attempt timestamps are not exact workflow start/completion timestamps.");
@@ -174,7 +176,15 @@ public class CopilotReadService {
         if (attempts.stream().anyMatch(e -> e.getAttemptNumber() == null)) {
             notes.add("Legacy attempt numbers are unavailable; recorded counts may be incomplete.");
         }
+        notes.addAll(replayNotes(job));
         return List.copyOf(notes);
+    }
+
+    private static List<String> replayNotes(Job job) {
+        return job.getTasks().stream().filter(t -> t.getExecutionGeneration() > 0)
+                .sorted(Comparator.comparing(Task::getId)).map(t ->
+                        "Task " + t.getId() + " evidence covers current execution generation "
+                                + t.getExecutionGeneration() + "; prior replay generations are excluded.").toList();
     }
 
     private static String safe(String value) {
@@ -241,7 +251,10 @@ public class CopilotReadService {
     /** Recorded retries are observed attempts, not the configured retry limit. Completeness is conservative run-wide. */
     public record TaskState(UUID taskId, String name, String status, int maxRetries, Instant deadLetteredAt,
             long recordedRetries, boolean retryHistoryComplete, TaskType type) {}
-    public record TaskFacts(UUID jobId, List<TaskState> tasks) {}
+    public record TaskFacts(UUID jobId, List<TaskState> tasks,
+            @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> unavailableEvidence) {
+        public TaskFacts(UUID jobId, List<TaskState> tasks) { this(jobId, tasks, List.of()); }
+    }
     public record Attempt(Integer attemptNumber, String status, Instant startedAt, Instant completedAt,
             String errorType, String errorMessage, Instant retryScheduledAt) {}
     public record TaskAttemptFacts(UUID jobId, UUID taskId, String name, String status,

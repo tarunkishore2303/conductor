@@ -29,7 +29,7 @@ class TaskOutputMigrationIT {
         jdbc.update("INSERT INTO tasks(id,job_id,name,status,max_retries,retry_count,created_at,updated_at) VALUES(?,?,'legacy-task','COMPLETE',2,1,now(),now())", task, job);
         insertAttempt(jdbc, complete, task, "COMPLETE", 1);
         insertAttempt(jdbc, failed, task, "FAILED", 0);
-        assertThat(Flyway.configure().dataSource(source).load().migrate().migrationsExecuted).isEqualTo(1);
+        assertThat(Flyway.configure().dataSource(source).target("11").load().migrate().migrationsExecuted).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE output_text IS NULL AND output_content_type IS NULL", Integer.class)).isEqualTo(2);
 
         // Empty successful output is present output; null means no output capture.

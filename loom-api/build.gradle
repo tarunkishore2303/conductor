@@ -29,3 +29,8 @@ dependencies {
     testImplementation 'org.springframework.kafka:spring-kafka-test'
     testImplementation 'org.awaitility:awaitility'
 }
+
+// Tests verify durable intent without starting the production polling relay.
+tasks.withType(Test).configureEach {
+    systemProperty 'conductor.outbox.enabled', 'false'
+}
