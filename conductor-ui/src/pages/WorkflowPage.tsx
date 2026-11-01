@@ -4,6 +4,7 @@ import { getWorkflow } from '../api/workflows'
 import { ResourceState } from '../components/ResourceState'
 import { formatTime } from '../api/time'
 import { lazy, Suspense } from 'react'
+import { WorkflowOptimizationPanel } from '../components/optimization/WorkflowOptimizationPanel'
 
 const WorkflowDag = lazy(() => import('../components/WorkflowDag').then(module => ({ default: module.WorkflowDag })))
 
@@ -47,6 +48,7 @@ export function WorkflowPage() {
               </table>
             </div>
           </section>
+          <WorkflowOptimizationPanel key={workflow.id} workflowId={workflow.id} />
         </>
       )}
     </>
