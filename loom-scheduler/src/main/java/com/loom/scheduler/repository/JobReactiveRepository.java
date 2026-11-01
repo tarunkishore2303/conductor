@@ -10,6 +10,10 @@ import java.util.UUID;
 
 public interface JobReactiveRepository extends ReactiveCrudRepository<JobRecord, UUID> {
 
+    /** Serialize evaluations of a job so concurrent branch completions cannot miss a join. */
+    @Query("SELECT * FROM jobs WHERE id = :id FOR UPDATE")
+    Mono<JobRecord> findByIdForUpdate(UUID id);
+
     @Modifying
     @Query("UPDATE jobs SET status = :status, version = version + 1, updated_at = NOW() WHERE id = :id AND version = :version")
     Mono<Integer> updateStatus(UUID id, String status, Long version);

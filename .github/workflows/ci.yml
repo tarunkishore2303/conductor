@@ -71,7 +71,7 @@ jobs:
       - name: Check Docker runtime
         run: docker info
       - name: Run container-backed tests and Flyway upgrades
-        run: ./gradlew :loom-api:integrationTest :loom-worker:integrationTest --no-daemon --stacktrace
+        run: ./gradlew :loom-api:integrationTest :loom-worker:integrationTest :loom-scheduler:integrationTest --no-daemon --stacktrace
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

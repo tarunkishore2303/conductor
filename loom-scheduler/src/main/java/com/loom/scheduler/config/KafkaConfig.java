@@ -3,16 +3,15 @@ package com.loom.scheduler.config;
 import com.loom.common.event.JobCreatedEvent;
 import com.loom.common.event.TaskResultEvent;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.*;
 import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
-import org.springframework.kafka.support.serializer.JacksonJsonSerializer;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.util.backoff.FixedBackOff;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -22,16 +21,6 @@ public class KafkaConfig {
 
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
-
-    @Bean
-    public KafkaTemplate<String, Object> kafkaTemplate() {
-        Map<String, Object> props = new HashMap<>();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JacksonJsonSerializer.class);
-        props.put(JacksonJsonSerializer.ADD_TYPE_INFO_HEADERS, false);
-        return new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(props));
-    }
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, JobCreatedEvent> jobCreatedListenerFactory() {
@@ -59,6 +48,9 @@ public class KafkaConfig {
         ConcurrentKafkaListenerContainerFactory<String, T> container =
             new ConcurrentKafkaListenerContainerFactory<>();
         container.setConsumerFactory(factory);
+        // Infrastructure failure must not silently discard a committed dispatch intent.
+        container.setCommonErrorHandler(new DefaultErrorHandler(
+            new FixedBackOff(1000L, FixedBackOff.UNLIMITED_ATTEMPTS)));
         return container;
     }
 }
