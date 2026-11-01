@@ -12,6 +12,17 @@ import java.util.UUID;
 
 public interface TaskReactiveRepository extends ReactiveCrudRepository<TaskRecord, UUID> {
 
+    @Query("""
+        SELECT EXISTS (
+            SELECT 1 FROM task_executions e JOIN tasks t ON t.id = e.task_id
+            WHERE e.execution_id = :executionId AND t.id = :taskId AND t.job_id = :jobId
+              AND e.execution_generation = t.execution_generation
+              AND t.status = :taskStatus AND e.status = :executionStatus
+        )
+        """)
+    Mono<Boolean> matchesCurrentExecution(UUID jobId, UUID taskId, UUID executionId,
+            String taskStatus, String executionStatus);
+
     Flux<TaskRecord> findByJobId(UUID jobId);
 
     @Query("SELECT depends_on_task_id FROM task_dependencies WHERE task_id = :taskId")
@@ -24,4 +35,13 @@ public interface TaskReactiveRepository extends ReactiveCrudRepository<TaskRecor
     @Modifying
     @Query("UPDATE tasks SET status = :status, version = version + 1, updated_at = NOW() WHERE id = :id AND version = :version")
     Mono<Integer> updateStatus(UUID id, String status, Long version);
+
+    /** PostgreSQL rechecks PENDING after waiting for a concurrently executing worker's row lock. */
+    @Modifying
+    @Query("""
+        /* cancel-pending-tasks */
+        UPDATE tasks SET status = 'CANCELLED', version = version + 1, updated_at = NOW()
+        WHERE job_id = :jobId AND status = 'PENDING'
+        """)
+    Mono<Integer> cancelPendingByJobId(UUID jobId);
 }

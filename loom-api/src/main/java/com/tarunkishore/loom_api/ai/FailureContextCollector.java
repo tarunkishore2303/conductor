@@ -34,9 +34,11 @@ public class FailureContextCollector {
                     "Run still has running tasks; retry analysis after execution settles");
         if (job.getTasks().isEmpty() || job.getTasks().size() > 50)
             throw new AiOutputException("Failure context supports 1 to 50 tasks");
-        var executions = evidence.findForJob(id, PageRequest.of(0, 301));
-        if (executions.size() > 300)
+        var loaded = evidence.findForJob(id, PageRequest.of(0, 301));
+        if (loaded.size() > 300)
             throw new AiOutputException("Run exceeds the bounded 300-attempt analysis context");
+        var executions = loaded.stream()
+                .filter(e -> e.getExecutionGeneration() == e.getTask().getExecutionGeneration()).toList();
         if (executions.stream()
                 .anyMatch(e -> e.getStatus() == TaskStatus.RUNNING || e.getCompletedAt() == null))
             throw new IllegalStateException("Run still has incomplete attempts");
@@ -58,6 +60,10 @@ public class FailureContextCollector {
         unavailable.add("Original workflow template linkage is not recorded for jobs.");
         if (executions.stream().anyMatch(e -> e.getAttemptNumber() == null))
             unavailable.add("Attempt numbers are unavailable for legacy execution records.");
+        job.getTasks().stream().filter(t -> t.getExecutionGeneration() > 0)
+                .sorted(Comparator.comparing(Task::getId)).forEach(t -> unavailable.add(
+                        "Task " + t.getId() + " evidence covers current execution generation "
+                                + t.getExecutionGeneration() + "; prior replay generations are excluded."));
         var tasks = job.getTasks().stream()
                 .sorted(Comparator.comparing(Task::getId))
                 .map(task -> taskEvidence(task, executions))

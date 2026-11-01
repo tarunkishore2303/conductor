@@ -22,3 +22,10 @@ dependencies {
     testImplementation 'org.springframework.kafka:spring-kafka-test'
     testImplementation 'org.awaitility:awaitility'
 }
+
+// The worker integration fixture reuses the authoritative outbox DDL without owning migrations.
+tasks.named('processTestResources') {
+    from('../loom-api/src/main/resources/db/migration/V12__transactional_outbox.sql') {
+        into 'db/migration'
+    }
+}

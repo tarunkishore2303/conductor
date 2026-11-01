@@ -10,9 +10,9 @@ import java.util.*;
 
 public interface FailureEvidenceRepository extends JpaRepository<TaskExecution, UUID> {
     @Query(
-            "select e from TaskExecution e join fetch e.task t where t.job.id=:jobId order by"
+            "select e from TaskExecution e join fetch e.task t where t.job.id=:jobId and e.executionGeneration=t.executionGeneration order by"
                 + " t.id,e.startedAt,e.id")
     List<TaskExecution> findForJob(@Param("jobId") UUID jobId, Pageable limit);
-    @Query("select e from TaskExecution e join fetch e.task t where t.job.id in :jobIds order by t.job.id,t.id,e.startedAt,e.id")
+    @Query("select e from TaskExecution e join fetch e.task t where t.job.id in :jobIds and e.executionGeneration=t.executionGeneration order by t.job.id,t.id,e.startedAt,e.id")
     List<TaskExecution> findOptimizationAttempts(@Param("jobIds") List<UUID> jobIds, Pageable limit);
 }

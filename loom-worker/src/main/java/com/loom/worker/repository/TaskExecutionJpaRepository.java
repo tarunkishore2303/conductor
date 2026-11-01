@@ -11,7 +11,7 @@ import java.util.UUID;
 
 public interface TaskExecutionJpaRepository extends JpaRepository<TaskExecution, UUID> {
 
-    List<TaskExecution> findByTaskIdAndStatusOrderByAttemptNumberAsc(UUID taskId, TaskStatus status, Pageable limit);
+    List<TaskExecution> findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(UUID taskId, int generation, TaskStatus status, Pageable limit);
 
     boolean existsByExecutionId(UUID executionId);
 

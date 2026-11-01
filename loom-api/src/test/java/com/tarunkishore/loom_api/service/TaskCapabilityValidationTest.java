@@ -3,6 +3,7 @@ package com.tarunkishore.loom_api.service;
 import com.loom.capability.*;
 import com.loom.common.dto.TaskDefinition;
 import com.loom.common.dto.JobSubmitRequest;
+import com.loom.common.outbox.JdbcOutboxWriter;
 import com.tarunkishore.loom_api.repository.JobRepository;
 import com.tarunkishore.loom_api.repository.TaskRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -133,7 +134,7 @@ class TaskCapabilityValidationTest {
     @Test void directJobSubmissionAlsoRejectsUndeclaredDataflowBeforePersistence() {
         var jobRepository = mock(JobRepository.class);
         var taskRepository = mock(TaskRepository.class);
-        var events = mock(JobEventPublisher.class);
+        var events = mock(JdbcOutboxWriter.class);
         var jobService = new JobService(jobRepository, taskRepository, new DAGValidator(), events,
                 new SimpleMeterRegistry(), validators, new TaskConfigCodec(validators));
         var tasks = List.of(task("fetch", TaskType.NOOP, new NoOpTaskConfig()),

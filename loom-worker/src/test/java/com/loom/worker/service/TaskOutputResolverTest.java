@@ -49,7 +49,15 @@ class TaskOutputResolverTest {
         available();
         assertThat(resolver.resolve(current, reference)).isEqualTo(new ResolvedTaskInput("fetch", "{\"id\":42}", "application/json"));
         verify(tasks).findDirectInputTasks(current.getId(), current.getJob().getId(), "fetch");
-        verify(executions).findByTaskIdAndStatusOrderByAttemptNumberAsc(source.getId(), TaskStatus.COMPLETE, PageRequest.of(0, 2));
+        verify(executions).findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(source.getId(), source.getExecutionGeneration(), TaskStatus.COMPLETE, PageRequest.of(0, 2));
+    }
+
+    @Test void resolvesOnlyCurrentReplayGenerationRatherThanHistoricalSuccesses() throws Exception {
+        source.setExecutionGeneration(2);
+        available();
+        assertThat(resolver.resolve(current, reference).output()).isEqualTo("{\"id\":42}");
+        verify(executions).findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(
+                source.getId(), 2, TaskStatus.COMPLETE, PageRequest.of(0, 2));
     }
 
     @Test void rejectsMissingOrCrossJobOrNonDirectSource() {
@@ -75,12 +83,12 @@ class TaskOutputResolverTest {
     }
 
     @Test void rejectsMissingSuccessfulAttempt() {
-        available(); when(executions.findByTaskIdAndStatusOrderByAttemptNumberAsc(source.getId(), TaskStatus.COMPLETE, PageRequest.of(0, 2))).thenReturn(List.of());
+        available(); when(executions.findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(source.getId(), source.getExecutionGeneration(), TaskStatus.COMPLETE, PageRequest.of(0, 2))).thenReturn(List.of());
         rejected("UPSTREAM_OUTPUT_UNAVAILABLE");
     }
 
     @Test void rejectsMultipleSuccessfulAttemptsRatherThanGuessing() {
-        available(); when(executions.findByTaskIdAndStatusOrderByAttemptNumberAsc(source.getId(), TaskStatus.COMPLETE, PageRequest.of(0, 2))).thenReturn(List.of(success, success));
+        available(); when(executions.findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(source.getId(), source.getExecutionGeneration(), TaskStatus.COMPLETE, PageRequest.of(0, 2))).thenReturn(List.of(success, success));
         rejected("UPSTREAM_OUTPUT_UNAVAILABLE");
     }
 
@@ -98,7 +106,7 @@ class TaskOutputResolverTest {
 
     private void available() {
         when(tasks.findDirectInputTasks(current.getId(), current.getJob().getId(), "fetch")).thenReturn(List.of(source));
-        when(executions.findByTaskIdAndStatusOrderByAttemptNumberAsc(source.getId(), TaskStatus.COMPLETE, PageRequest.of(0, 2))).thenReturn(List.of(success));
+        when(executions.findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(source.getId(), source.getExecutionGeneration(), TaskStatus.COMPLETE, PageRequest.of(0, 2))).thenReturn(List.of(success));
     }
 
     private void rejected(String code) {

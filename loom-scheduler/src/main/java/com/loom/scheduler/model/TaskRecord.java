@@ -14,5 +14,11 @@ public record TaskRecord(
     TaskStatus status,
     int maxRetries,
     int retryCount,
-    Long version
-) {}
+    Long version,
+    int executionGeneration
+) {
+    public TaskRecord(UUID id, UUID jobId, String name, TaskStatus status, int maxRetries,
+            int retryCount, Long version) {
+        this(id, jobId, name, status, maxRetries, retryCount, version, 0);
+    }
+}

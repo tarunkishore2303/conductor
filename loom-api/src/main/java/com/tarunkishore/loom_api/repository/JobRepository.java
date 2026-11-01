@@ -14,6 +14,10 @@ import java.util.UUID;
 
 public interface JobRepository extends JpaRepository<Job, UUID> {
 
+    // Serialize job mutations without conflicting with workers' FK KEY SHARE checks.
+    @Query(value = "select * from jobs where id = :id for no key update", nativeQuery = true)
+    Optional<Job> findByIdForUpdate(@Param("id") UUID id);
+
     List<Job> findAllBy(Pageable pageable);
 
     @Query("SELECT j FROM Job j LEFT JOIN FETCH j.tasks WHERE j.id = :id")

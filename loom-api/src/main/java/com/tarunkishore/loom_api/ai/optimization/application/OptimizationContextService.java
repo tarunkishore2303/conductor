@@ -79,6 +79,10 @@ public class OptimizationContextService {
                     || !runMatcher.settled(job, runTasks, attemptsByTask)) {
                 excluded++; continue;
             }
+            runTasks.stream().filter(t -> t.getExecutionGeneration() > 0)
+                    .sorted(Comparator.comparing(Task::getId)).forEach(t -> notes.add(
+                            "Task " + t.getId() + " evidence covers current execution generation "
+                                    + t.getExecutionGeneration() + "; prior replay generations are excluded."));
             var facts = runTasks.stream().sorted(Comparator.comparing(Task::getLogicalId)).map(t ->
                     new OptimizationContext.TaskRun(t.getId(), t.getLogicalId(), t.getStatus().name(),
                             t.getDeadLetteredAt(), attemptsByTask.getOrDefault(t.getId(), List.of()).stream()

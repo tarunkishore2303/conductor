@@ -24,7 +24,7 @@ public class TaskExecution {
     @JoinColumn(name = "task_id", nullable = false)
     private Task task;
 
-    /** Idempotency key — worker writes this before running; checked on retry. */
+    /** Deterministic attempt identity; commits with the result, not before the external side effect. */
     @Column(nullable = false, unique = true)
     private UUID executionId;
 
@@ -39,6 +39,11 @@ public class TaskExecution {
 
     /** Zero-based attempt number; null for records created before evidence capture. */
     private Integer attemptNumber;
+
+    @JsonIgnore
+    @org.hibernate.annotations.ColumnDefault("0")
+    @Column(nullable = false)
+    private int executionGeneration;
 
     @Column(length = 255)
     private String errorType;

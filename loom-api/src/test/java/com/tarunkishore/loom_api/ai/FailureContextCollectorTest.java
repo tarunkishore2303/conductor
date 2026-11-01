@@ -193,4 +193,38 @@ class FailureContextCollectorTest {
         assertThat(new IncidentDocumentBuilder().build(after)).isEqualTo(documentsBefore);
     }
 
+    @Test
+    void replayAnalysisUsesOnlyCurrentGenerationAndExplainsHistoricalExclusion() {
+        var job = new Job();
+        job.setId(id);
+        job.setStatus(JobStatus.FAILED);
+        var task = new Task();
+        task.setId(UUID.randomUUID());
+        task.setName("Replayed HTTP");
+        task.setStatus(TaskStatus.DEAD_LETTERED);
+        task.setExecutionGeneration(1);
+        job.setTasks(List.of(task));
+        var previous = new TaskExecution();
+        previous.setTask(task);
+        previous.setExecutionGeneration(0);
+        previous.setAttemptNumber(0);
+        previous.setStatus(TaskStatus.FAILED);
+        previous.setCompletedAt(Instant.now());
+        previous.setErrorMessage("Previous generation failure");
+        var current = new TaskExecution();
+        current.setTask(task);
+        current.setExecutionGeneration(1);
+        current.setAttemptNumber(0);
+        current.setStatus(TaskStatus.FAILED);
+        current.setCompletedAt(Instant.now());
+        current.setErrorMessage("Current generation failure");
+        when(jobs.findByIdWithTasks(id)).thenReturn(Optional.of(job));
+        when(evidence.findForJob(eq(id), any())).thenReturn(List.of(previous, current));
+        var facts = collector.collect(id);
+        assertThat(facts.tasks().getFirst().attempts()).hasSize(1);
+        assertThat(facts.tasks().getFirst().attempts().getFirst().errorMessage()).isEqualTo("Current generation failure");
+        assertThat(facts.unavailableEvidence()).anyMatch(note -> note.contains("current execution generation 1")
+                && note.contains("prior replay generations are excluded"));
+    }
+
 }

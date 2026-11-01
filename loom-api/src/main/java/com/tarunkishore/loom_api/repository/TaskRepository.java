@@ -5,6 +5,9 @@ import com.loom.common.model.TaskStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
+import java.util.Optional;
 
 import java.util.List;
 import org.springframework.data.jpa.repository.Query;
@@ -12,6 +15,13 @@ import org.springframework.data.repository.query.Param;
 import java.util.UUID;
 
 public interface TaskRepository extends JpaRepository<Task, UUID> {
+
+    @Query("select t.job.id from Task t where t.id = :id")
+    Optional<UUID> findJobId(@Param("id") UUID id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select t from Task t where t.id = :id")
+    Optional<Task> findByIdForUpdate(@Param("id") UUID id);
 
     List<Task> findByJobId(UUID jobId);
 

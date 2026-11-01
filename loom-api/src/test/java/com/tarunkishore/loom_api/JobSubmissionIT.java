@@ -10,14 +10,9 @@ import com.tarunkishore.loom_api.dto.JobSummaryResponse;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateRequest;
 import com.tarunkishore.loom_api.dto.WorkflowTemplateResponse;
 import com.tarunkishore.loom_api.repository.JobRepository;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.common.serialization.StringDeserializer;
-import org.awaitility.Awaitility;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.resttestclient.TestRestTemplate;
 import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
@@ -25,21 +20,19 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.kafka.ConfluentKafkaContainer;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "conductor.outbox.enabled=false")
 @AutoConfigureTestRestTemplate
 @Testcontainers
 class JobSubmissionIT {
@@ -51,27 +44,17 @@ class JobSubmissionIT {
         .withUsername("loom")
         .withPassword("loom");
 
-    @Container
-    static final ConfluentKafkaContainer kafka = new ConfluentKafkaContainer(
-        DockerImageName.parse("confluentinc/cp-kafka:7.5.3"));
-
     @DynamicPropertySource
     static void configure(DynamicPropertyRegistry registry) {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
-        registry.add("spring.kafka.bootstrap-servers", kafka::getBootstrapServers);
     }
 
     @Autowired TestRestTemplate restTemplate;
     @Autowired JobRepository jobRepository;
 
-    private KafkaConsumer<String, String> kafkaConsumer;
-
-    @AfterEach
-    void cleanup() {
-        if (kafkaConsumer != null) kafkaConsumer.close();
-    }
+    @Autowired JdbcTemplate jdbc;
 
     private JobSubmitRequest diamondDag(String jobName) {
         return new JobSubmitRequest(jobName, List.of(
@@ -132,31 +115,17 @@ class JobSubmissionIT {
     }
 
     @Test
-    void submitJob_publishesJobCreatedEventToKafka() {
-        kafkaConsumer = new KafkaConsumer<>(Map.of(
-            ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, kafka.getBootstrapServers(),
-            ConsumerConfig.GROUP_ID_CONFIG, "it-consumer-" + UUID.randomUUID(),
-            ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest",
-            ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName(),
-            ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName()
-        ));
-        kafkaConsumer.subscribe(List.of("job-created"));
-
+    void submitJob_commitsDurableJobCreatedIntentWithoutKafka() {
         ResponseEntity<JobResponse> response = restTemplate.postForEntity(
-            "/api/v1/jobs", diamondDag("kafka-test"), JobResponse.class);
-        String expectedJobId = response.getBody().id().toString();
-
-        Awaitility.await().atMost(15, TimeUnit.SECONDS).untilAsserted(() -> {
-            ConsumerRecords<String, String> records = kafkaConsumer.poll(Duration.ofMillis(500));
-            boolean found = false;
-            for (var record : records) {
-                if (expectedJobId.equals(record.key())) {
-                    found = true;
-                    break;
-                }
-            }
-            assertThat(found).as("job-created event not found for jobId " + expectedJobId).isTrue();
-        });
+            "/api/v1/jobs", diamondDag("outbox-test"), JobResponse.class);
+        UUID jobId = response.getBody().id();
+        var intent = jdbc.queryForMap("select topic,event_key,event_type,payload_json,published_at "
+                + "from outbox_events where dedupe_key=?", "job-created:" + jobId);
+        assertThat(intent.get("topic")).isEqualTo("job-created");
+        assertThat(intent.get("event_key")).isEqualTo(jobId.toString());
+        assertThat(intent.get("payload_json").toString()).contains(jobId.toString());
+        assertThat(intent.get("published_at")).isNull();
+        assertThat(jobRepository.findById(jobId)).isPresent();
     }
 
     @Test

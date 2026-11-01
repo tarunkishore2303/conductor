@@ -39,8 +39,8 @@ public final class TaskOutputResolver {
         if (source.getStatus() != TaskStatus.COMPLETE)
             throw failure("UPSTREAM_OUTPUT_UNAVAILABLE", "Input dependency has not completed successfully");
         // Fetch two to detect ambiguity rather than arbitrarily choosing a successful attempt.
-        var successes = executions.findByTaskIdAndStatusOrderByAttemptNumberAsc(
-                source.getId(), TaskStatus.COMPLETE, PageRequest.of(0, 2));
+        var successes = executions.findByTaskIdAndExecutionGenerationAndStatusOrderByAttemptNumberAsc(
+                source.getId(), source.getExecutionGeneration(), TaskStatus.COMPLETE, PageRequest.of(0, 2));
         if (successes.size() != 1)
             throw failure("UPSTREAM_OUTPUT_UNAVAILABLE", "Input dependency must have exactly one successful attempt");
         var execution = successes.getFirst();

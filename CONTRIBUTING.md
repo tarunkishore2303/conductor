@@ -16,21 +16,21 @@ Podman/Ryuk overrides into GitHub Actions.
 Run from the repository root:
 
 ```bash
-./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon
+./gradlew build :loom-api:integrationTest :loom-worker:integrationTest :loom-scheduler:integrationTest --no-daemon
 python -m unittest discover -s scripts/tests -q
 git diff --check
 docker compose --profile ai --profile demo config --quiet
 COMPOSE_BAKE=false docker compose --parallel 2 --profile ai build loom-api loom-ai loom-worker-1 loom-scheduler loom-monitor
 ```
 
-The API and worker currently contain all container-backed integration tests.
+The API, worker and scheduler contain container-backed integration tests.
 On Windows, use `gradlew.bat` and `scripts/compose.ps1` for Podman/Compose.
 CI runs the same suites with fake AI clients, without downloading models.
 
 ## Invariants
 
 - Never modify or remove a Flyway migration that has shipped/merged. Add
-  V12, V13, etc. instead. CI rejects changes to migrations present in the base.
+  V13, V14, etc. instead. CI rejects changes to migrations present in the base.
 - AI is local through Ollama only. Do not add cloud model/API dependencies.
 - AI never gains scheduling, worker, SQL, or deterministic execution authority.
   Proposals require deterministic validation, preview, and explicit approval.
