@@ -5,6 +5,7 @@ import { ResourceState } from '../components/ResourceState'
 import { formatTime } from '../api/time'
 import { StatusBadge } from '../components/StatusBadge'
 import { IntelligenceSection } from '../components/intelligence/IntelligenceSection'
+import { CopilotPanel } from '../components/copilot/CopilotPanel'
 
 export function RunPage() {
   const { jobId = '' } = useParams()
@@ -55,6 +56,7 @@ export function RunPage() {
           </section>
           <p className="footnote">Timestamps show record creation and last state updates, not active attempt duration. Stored failure analysis below may include attempt evidence; task outputs are not displayed.</p>
           <IntelligenceSection key={run.id} run={run} />
+          <CopilotPanel key={`copilot-${run.id}`} jobId={run.id} />
         </>
       )}
     </>

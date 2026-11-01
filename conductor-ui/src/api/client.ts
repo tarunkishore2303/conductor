@@ -8,8 +8,12 @@ export class ApiError extends Error {
 }
 
 // Never display arbitrary provider or database error internals.
-async function request<T>(path: string, method: 'GET' | 'POST', signal?: AbortSignal): Promise<T> {
-  const response = await fetch(apiUrl(path), { method, signal, headers: { Accept: 'application/json' } })
+async function request<T>(path: string, method: 'GET' | 'POST', signal?: AbortSignal, body?: unknown): Promise<T> {
+  const response = await fetch(apiUrl(path), {
+    method, signal,
+    headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
   if (!response.ok) {
     const message = response.status === 404 ? 'This resource was not found.'
       : response.status >= 500 ? 'Conductor API is unavailable. Try again shortly.'
@@ -20,4 +24,4 @@ async function request<T>(path: string, method: 'GET' | 'POST', signal?: AbortSi
 }
 
 export const get = <T>(path: string, signal?: AbortSignal) => request<T>(path, 'GET', signal)
-export const post = <T>(path: string) => request<T>(path, 'POST')
+export const post = <T, B = unknown>(path: string, body?: B) => request<T>(path, 'POST', undefined, body)
