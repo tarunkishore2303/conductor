@@ -1,6 +1,6 @@
 plugins {
     id 'java'
-    id 'org.springframework.boot' version '4.1.1' apply false
+    id 'org.springframework.boot' version '4.1.2' apply false
     id 'io.spring.dependency-management' version '1.1.7' apply false
 }
 
@@ -25,11 +25,11 @@ subprojects {
 
     dependencyManagement {
         imports {
-            mavenBom "org.springframework.boot:spring-boot-dependencies:4.1.1"
+            mavenBom "org.springframework.boot:spring-boot-dependencies:4.1.2"
         }
         dependencies {
             dependency 'org.redisson:redisson-spring-boot-starter:4.8.0'
-            dependency 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.1.1'
+            dependency 'org.springdoc:springdoc-openapi-starter-webmvc-ui:3.2.0'
         }
     }
 

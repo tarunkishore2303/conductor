@@ -1,7 +1,7 @@
 plugins { id 'org.springframework.boot' }
 
 dependencyManagement {
-    imports { mavenBom 'org.springframework.ai:spring-ai-bom:2.0.1' }
+    imports { mavenBom 'org.springframework.ai:spring-ai-bom:2.0.2' }
 }
 
 dependencies {
