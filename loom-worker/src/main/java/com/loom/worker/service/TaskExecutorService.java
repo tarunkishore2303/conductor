@@ -4,6 +4,8 @@ import com.loom.worker.exception.TaskExecutionException;
 
 import com.loom.common.event.TaskEvent;
 import com.loom.common.event.TaskResultEvent;
+import com.loom.common.event.ExecutionIdentity;
+import com.loom.common.outbox.JdbcOutboxWriter;
 import com.loom.common.model.*;
 import com.loom.common.security.FailureEvidenceSanitizer;
 import com.loom.worker.repository.TaskExecutionJpaRepository;
@@ -19,25 +21,19 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.MDC;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.dao.DataAccessException;
+import jakarta.persistence.PersistenceException;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TaskExecutorService {
-
-    static final String TASK_RESULTS_TOPIC = "task-results";
-    static final String TASK_QUEUE_TOPIC   = "task-queue";
 
     private final WorkerTaskRepository taskRepo;
     private final TaskExecutionJpaRepository executionRepo;
@@ -46,8 +42,7 @@ public class TaskExecutorService {
     private final TaskOutputResolver outputResolver;
     private final TaskProperties taskProperties;
     private final RedissonClient redisson;
-    private final KafkaTemplate<String, Object> kafkaTemplate;
-    private final ScheduledExecutorService retryExecutor;
+    private final JdbcOutboxWriter outbox;
     private final MeterRegistry meterRegistry;
     private final TransactionTemplate transactionTemplate;
 
@@ -74,13 +69,12 @@ public class TaskExecutorService {
             acquired = lock.tryLock(5, 60, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.warn("Lock acquisition interrupted for task {}", event.taskId());
-            return;
+            throw new IllegalStateException("Task lock acquisition was interrupted", e);
         }
 
         if (!acquired) {
-            log.warn("Could not acquire lock for task {} — another worker is handling it", event.taskId());
-            return;
+            // Do not acknowledge: the previous holder may have crashed before committing.
+            throw new IllegalStateException("Task lock is currently unavailable");
         }
 
         try {
@@ -92,19 +86,30 @@ public class TaskExecutorService {
     }
 
     private void executeInTransaction(TaskEvent event) {
-        UUID executionId = UUID.nameUUIDFromBytes(
-            (event.taskId() + "-" + event.attemptNumber()).getBytes(StandardCharsets.UTF_8));
+        UUID executionId = ExecutionIdentity.id(event.taskId(), event.generation(), event.attemptNumber());
 
         if (executionRepo.existsByExecutionId(executionId)) {
             log.info("Execution {} already recorded — skipping duplicate", executionId);
             return;
         }
 
-        Task task = taskRepo.findById(event.taskId()).orElseThrow(
+        Task task = taskRepo.findLockedById(event.taskId()).orElseThrow(
             () -> new IllegalArgumentException("Task not found: " + event.taskId()));
 
         if (task.getJob() == null || !event.jobId().equals(task.getJob().getId())) {
             throw new IllegalArgumentException("Task event scope does not match persisted job");
+        }
+
+        // Recheck after the database task lock; the earlier delivery may have committed while we waited.
+        if (executionRepo.existsByExecutionId(executionId)) return;
+
+        if (task.getExecutionGeneration() != event.generation()) {
+            log.info("Ignoring obsolete generation for task {}", event.taskId());
+            return;
+        }
+        JobStatus jobStatus = task.getJob().getStatus();
+        if (jobStatus == JobStatus.CANCELLING || jobStatus == JobStatus.CANCELLED || jobStatus == JobStatus.COMPLETE) {
+            return;
         }
 
         if (task.getStatus() != TaskStatus.PENDING) {
@@ -117,6 +122,7 @@ public class TaskExecutorService {
         execution.setExecutionId(executionId);
         execution.setStatus(TaskStatus.RUNNING);
         execution.setAttemptNumber(event.attemptNumber());
+        execution.setExecutionGeneration(event.generation());
         executionRepo.save(execution);
 
         task.setStatus(TaskStatus.RUNNING);
@@ -139,87 +145,65 @@ public class TaskExecutorService {
             catch (IllegalArgumentException invalid) {
                 throw new TaskExecutionException("TASK_OUTPUT_TOO_LARGE", "Task output exceeds supported bounds or content type");
             }
-            execution.setOutputText(result.output());
-            execution.setOutputContentType(result.contentType());
-
-            execution.setStatus(TaskStatus.COMPLETE);
-            execution.setCompletedAt(Instant.now());
-            executionRepo.save(execution);
-
-            task.setStatus(TaskStatus.COMPLETE);
-            taskRepo.save(task);
-
-            meterRegistry.counter("loom.tasks.completed", "handler_type", task.getTaskType().name()).increment();
-
-            afterCommit(() -> kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
-                new TaskResultEvent(event.jobId(), event.taskId(), executionId, TaskStatus.COMPLETE, null)));
-
+            // Result publication is deliberately outside this handler catch. A database/outbox
+            // failure must roll back the attempt, not be misclassified as a capability failure.
+            complete(task, execution, result);
+        } catch (DataAccessException | PersistenceException databaseFailure) {
+            // Resolver/repository failures are infrastructure failures: retry Kafka delivery after rollback.
+            observation.failure();
+            throw databaseFailure;
         } catch (Exception ex) {
             observation.failure();
-            String safeError = FailureEvidenceSanitizer.sanitize(ex.getMessage());
-            log.error("Task {} failed on attempt {}: {}", event.taskId(), event.attemptNumber(), safeError);
-
-            execution.setStatus(TaskStatus.FAILED);
-            execution.setOutputText(null);
-            execution.setOutputContentType(null);
-            execution.setCompletedAt(Instant.now());
-            execution.setErrorType(ex instanceof TaskExecutionException controlled
-                    ? controlled.errorType() : ex.getClass().getName());
-            execution.setErrorMessage(safeError);
-            executionRepo.save(execution);
-
-            meterRegistry.counter("loom.tasks.failed", "handler_type", task.getTaskType().name()).increment();
-
-            int nextAttempt = event.attemptNumber() + 1;
-            if (nextAttempt <= event.maxRetries()) {
-                long delaySeconds = retryDelaySeconds(event);
-                execution.setRetryScheduledAt(Instant.now().plusSeconds(delaySeconds));
-                afterCommit(() -> scheduleRetry(event, nextAttempt));
-                task.setStatus(TaskStatus.PENDING);
-                taskRepo.save(task);
-            } else {
-                task.setStatus(TaskStatus.DEAD_LETTERED);
-                task.setDeadLetteredAt(Instant.now());
-                taskRepo.save(task);
-                afterCommit(() -> kafkaTemplate.send(TASK_RESULTS_TOPIC, event.taskId().toString(),
-                    new TaskResultEvent(event.jobId(), event.taskId(), executionId,
-                        TaskStatus.DEAD_LETTERED, safeError)));
-            }
+            fail(task, execution, event, ex);
+            return;
         } finally {
             observation.close();
         }
+        outbox.taskResult(new TaskResultEvent(event.jobId(), event.taskId(), executionId, TaskStatus.COMPLETE, null));
     }
 
-    private void scheduleRetry(TaskEvent event, int nextAttempt) {
-        long delaySeconds = retryDelaySeconds(event);
-        log.info("Scheduling retry {} for task {} in {}s", nextAttempt, event.taskId(), delaySeconds);
-        retryExecutor.schedule(() -> {
-            MDC.put("jobId", event.jobId().toString());
-            MDC.put("taskId", event.taskId().toString());
-            try {
-                kafkaTemplate.send(TASK_QUEUE_TOPIC, event.taskId().toString(),
-                    new TaskEvent(event.jobId(), event.taskId(), event.taskName(),
-                        event.maxRetries(), nextAttempt));
-            } finally {
-                MDC.clear();
-            }
-        }, delaySeconds, TimeUnit.SECONDS);
+    private void complete(Task task, TaskExecution execution, TaskExecutionResult result) {
+        execution.setOutputText(result.output());
+        execution.setOutputContentType(result.contentType());
+        execution.setStatus(TaskStatus.COMPLETE);
+        execution.setCompletedAt(Instant.now());
+        task.setStatus(TaskStatus.COMPLETE);
+        meterRegistry.counter("loom.tasks.completed", "handler_type", task.getTaskType().name()).increment();
+    }
+
+    private void fail(Task task, TaskExecution execution, TaskEvent event, Exception ex) {
+        String safeError = FailureEvidenceSanitizer.sanitize(ex.getMessage());
+        log.error("Task {} failed on attempt {}: {}", event.taskId(), event.attemptNumber(), safeError);
+
+        execution.setStatus(TaskStatus.FAILED);
+        execution.setOutputText(null);
+        execution.setOutputContentType(null);
+        execution.setCompletedAt(Instant.now());
+        execution.setErrorType(ex instanceof TaskExecutionException controlled
+                ? controlled.errorType() : ex.getClass().getName());
+        execution.setErrorMessage(safeError);
+        executionRepo.save(execution);
+
+        meterRegistry.counter("loom.tasks.failed", "handler_type", task.getTaskType().name()).increment();
+
+        int nextAttempt = event.attemptNumber() + 1;
+        if (nextAttempt <= event.maxRetries()) {
+            long delaySeconds = retryDelaySeconds(event);
+            execution.setRetryScheduledAt(Instant.now().plusSeconds(delaySeconds));
+            outbox.taskQueue(new TaskEvent(event.jobId(), event.taskId(), event.taskName(),
+                    event.maxRetries(), nextAttempt, event.generation()), execution.getRetryScheduledAt());
+            task.setStatus(TaskStatus.PENDING);
+            taskRepo.save(task);
+        } else {
+            task.setStatus(TaskStatus.DEAD_LETTERED);
+            task.setDeadLetteredAt(Instant.now());
+            taskRepo.save(task);
+            outbox.taskResult(new TaskResultEvent(event.jobId(), event.taskId(), execution.getExecutionId(),
+                    TaskStatus.DEAD_LETTERED, safeError));
+        }
     }
 
     private static long retryDelaySeconds(TaskEvent event) {
         return (long) Math.pow(2, event.attemptNumber());
-    }
-
-    private void afterCommit(Runnable action) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            action.run();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                action.run();
-            }
-        });
     }
 }

@@ -11,6 +11,8 @@ import org.apache.kafka.common.serialization.StringDeserializer;
 import org.awaitility.Awaitility;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.springframework.context.annotation.Import;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import com.loom.capability.*;
@@ -20,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -44,6 +47,7 @@ import java.nio.charset.StandardCharsets;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
+@Import(WorkerOutboxTestConfiguration.class)
 @Testcontainers
 class TaskExecutionIT {
 
@@ -51,6 +55,8 @@ class TaskExecutionIT {
     private static java.util.concurrent.ExecutorService httpExecutor;
     private static final Map<String, String> notifications = new ConcurrentHashMap<>();
     private static final Map<String, AtomicInteger> flakyAttempts = new ConcurrentHashMap<>();
+    private static WorkerOutboxTestConfiguration.TestRelay relayForShutdown;
+    private static DefaultKafkaProducerFactory<String, Object> producerFactoryForShutdown;
 
     @BeforeAll static void startHttpEndpoint() throws Exception {
         http = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -89,6 +95,10 @@ class TaskExecutionIT {
     }
 
     @AfterAll static void stopHttpEndpoint() {
+        // User cleanup runs before Testcontainers stops PostgreSQL/Kafka. Stop the
+        // test-only scheduled publisher now, rather than waiting for context cache shutdown.
+        if (relayForShutdown != null) relayForShutdown.close();
+        if (producerFactoryForShutdown != null) producerFactoryForShutdown.destroy();
         if (http != null) http.stop(0);
         if (httpExecutor != null) httpExecutor.shutdownNow();
     }
@@ -118,16 +128,26 @@ class TaskExecutionIT {
         registry.add("spring.data.redis.host", redis::getHost);
         registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
         // Use Hibernate DDL instead of Flyway (worker has no migration scripts)
-        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create-drop");
+        // The disposable PostgreSQL container owns teardown; do not run DROP after it stops.
+        registry.add("spring.jpa.hibernate.ddl-auto", () -> "create");
         registry.add("spring.flyway.enabled", () -> "false");
         registry.add("conductor.demo.failures-enabled", () -> "true");
         registry.add("conductor.tasks.http.allow-private-addresses", () -> "true");
     }
 
     @Autowired WorkerTaskRepository taskRepo;
+    @Autowired com.loom.worker.service.TaskExecutorService executor;
     @Autowired JdbcTemplate jdbc;
     @Autowired KafkaTemplate<String, Object> kafkaTemplate;
     @Autowired TaskConfigCodec configCodec;
+    @Autowired WorkerOutboxTestConfiguration.TestRelay relay;
+    @Autowired DefaultKafkaProducerFactory<String, Object> testTaskProducerFactory;
+
+    @BeforeEach void initializeOutbox() {
+        relayForShutdown = relay;
+        producerFactoryForShutdown = testTaskProducerFactory;
+        relay.initialize();
+    }
 
     private KafkaConsumer<String, TaskResultEvent> resultConsumer;
 
@@ -384,6 +404,95 @@ class TaskExecutionIT {
         assertThat(taskRepo.findById(transform).orElseThrow().getStatus()).isEqualTo(TaskStatus.PENDING);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=?", Integer.class, transform)).isZero();
         // This proves worker persistence, not scheduler behavior: no downstream event was dispatched here.
+    }
+
+    @Test
+    void retryIntentIsDurableAndRecoveredByANewPublisherWithoutWorkerTimer() {
+        relay.pause();
+        UUID taskId = insertCapabilityTask("durable-retry", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("GET", localUrl("/unavailable"), 2000, null, null), 1);
+        try {
+            // Execute once without publishing any pending events; only PostgreSQL carries the retry.
+            executor.process(new TaskEvent(jobId(taskId), taskId, "durable-retry", 1, 0));
+            assertThat(taskRepo.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.PENDING);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM outbox_events o JOIN task_executions e "
+                    + "ON o.available_at=e.retry_scheduled_at WHERE e.task_id=? AND o.dedupe_key=? "
+                    + "AND o.published_at IS NULL AND o.available_at > CURRENT_TIMESTAMP", Integer.class,
+                    taskId, "task-queue:" + taskId + ":0:1")).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT status FROM task_executions WHERE task_id=?", String.class, taskId)).isEqualTo("FAILED");
+            // The old publisher remains paused. A new publisher discovers the committed intent.
+            try (var recovered = new WorkerOutboxTestConfiguration.TestRelay(jdbc)) {
+                recovered.initialize();
+                Awaitility.await().atMost(20, TimeUnit.SECONDS).untilAsserted(() -> {
+                    recovered.publishDue();
+                    assertThat(taskRepo.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.DEAD_LETTERED);
+                });
+            }
+            assertThat(jdbc.queryForList("SELECT attempt_number FROM task_executions WHERE task_id=? ORDER BY attempt_number",
+                    Integer.class, taskId)).containsExactly(0, 1);
+        } finally { relay.resume(); }
+    }
+
+    @Test
+    void outputAndCompletionCommitWithOnlyBoundedResultIntent() {
+        relay.pause();
+        UUID taskId = insertCapabilityTask("output-intent", TaskType.TRANSFORM,
+                new TransformTaskConfig("JSON_SELECT", "{\"privatePayload\":42}", List.of("privatePayload"), Map.of()), 0);
+        try {
+            executor.process(new TaskEvent(jobId(taskId), taskId, "output-intent", 0, 0));
+            assertThat(taskRepo.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.COMPLETE);
+            assertThat(output(taskId)).isEqualTo("{\"privatePayload\":42}");
+            String payload = jdbc.queryForObject("SELECT payload_json FROM outbox_events WHERE event_key=?", String.class, taskId.toString());
+            assertThat(payload).contains("COMPLETE").doesNotContain("privatePayload", "output", "config");
+            assertThat(jdbc.queryForObject("SELECT published_at FROM outbox_events WHERE event_key=?", OffsetDateTime.class, taskId.toString())).isNull();
+        } finally { relay.resume(); }
+    }
+
+    @Test
+    void resultOutboxFailureRollsBackSuccessfulAttemptAndTaskState() {
+        UUID taskId = insertCapabilityTask("atomic-result", TaskType.NOOP, new NoOpTaskConfig(), 0);
+        String constraint = "test_outbox_failure_" + taskId.toString().replace("-", "");
+        jdbc.execute("ALTER TABLE outbox_events ADD CONSTRAINT " + constraint + " CHECK (event_key <> '" + taskId + "')");
+        try {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> executor.process(
+                    new TaskEvent(jobId(taskId), taskId, "atomic-result", 0, 0)))
+                    .isInstanceOf(org.springframework.dao.DataAccessException.class);
+            assertThat(taskRepo.findById(taskId).orElseThrow().getStatus()).isEqualTo(TaskStatus.PENDING);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=?", Integer.class, taskId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM outbox_events WHERE event_key=?", Integer.class, taskId.toString())).isZero();
+        } finally { jdbc.execute("ALTER TABLE outbox_events DROP CONSTRAINT " + constraint); }
+    }
+
+    @Test
+    void replayGenerationExecutesFreshAttemptAndOldGenerationIsIgnored() {
+        UUID taskId = insertCapabilityTask("replay-generation", TaskType.NOOP, new NoOpTaskConfig(), 0);
+        UUID job = jobId(taskId);
+        executor.process(new TaskEvent(job, taskId, "replay-generation", 0, 0));
+        jdbc.update("UPDATE tasks SET status='PENDING',execution_generation=1,retry_count=0 WHERE id=?", taskId);
+        executor.process(new TaskEvent(job, taskId, "replay-generation", 0, 0, 0));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=?", Integer.class, taskId)).isEqualTo(1);
+        executor.process(new TaskEvent(job, taskId, "replay-generation", 0, 0, 1));
+        executor.process(new TaskEvent(job, taskId, "replay-generation", 0, 0, 1));
+        assertThat(jdbc.queryForList("SELECT execution_generation FROM task_executions WHERE task_id=? ORDER BY execution_generation",
+                Integer.class, taskId)).containsExactly(0, 1);
+        assertThat(jdbc.queryForObject("SELECT count(DISTINCT execution_id) FROM task_executions WHERE task_id=?", Integer.class, taskId)).isEqualTo(2);
+    }
+
+    @Test
+    void cancelledJobIgnoresDelayedRetryWithoutDeletingIntent() {
+        relay.pause();
+        UUID taskId = insertCapabilityTask("cancelled-retry", TaskType.HTTP_REQUEST,
+                new HttpRequestTaskConfig("GET", localUrl("/unavailable"), 2000, null, null), 1);
+        try {
+            UUID job = jobId(taskId);
+            executor.process(new TaskEvent(job, taskId, "cancelled-retry", 1, 0));
+            jdbc.update("UPDATE jobs SET status='CANCELLED' WHERE id=?", job);
+            jdbc.update("UPDATE tasks SET status='CANCELLED' WHERE id=?", taskId);
+            executor.process(new TaskEvent(job, taskId, "cancelled-retry", 1, 1));
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM task_executions WHERE task_id=?", Integer.class, taskId)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM outbox_events WHERE dedupe_key=?", Integer.class,
+                    "task-queue:" + taskId + ":0:1")).isEqualTo(1);
+        } finally { relay.resume(); }
     }
 
     private UUID insertLinkedTask(UUID upstream, String logicalId, TaskType type, TaskConfig config, int retries) {
