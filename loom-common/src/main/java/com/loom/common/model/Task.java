@@ -51,6 +51,12 @@ public class Task {
     @Column(nullable = false)
     private int retryCount;
 
+    /** Intentional replay identity, not part of the public run DTO. */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    @org.hibernate.annotations.ColumnDefault("0")
+    @Column(nullable = false)
+    private int executionGeneration;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
