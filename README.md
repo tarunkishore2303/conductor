@@ -395,9 +395,9 @@ python scripts/failure-analysis-smoke.py
 
 The smoke script creates a job, checks three failed attempts and terminal DLQ
 evidence, requests analysis, and verifies cached reuse. Normal execution remains
-separate from analysis. Retry scheduling still uses an in-memory executor; after-commit
-Kafka publication avoids reading uncommitted evidence but is not a durable outbox.
-Existing DLQ replay limitations are not repaired by AI analysis.
+separate from analysis. Retry scheduling and execution-critical Kafka publication use
+the PostgreSQL transactional outbox described below. DLQ replay starts a new durable
+execution generation; AI analysis does not perform replay.
 
 ## Incident Memory
 
@@ -646,6 +646,84 @@ Typed configuration records group AI transport, failure-context limits, copilot 
 
 Task capabilities extend these conventions with typed configuration, dedicated validators and bounded handler instrumentation.
 
+## Durable Event Publication
+
+PostgreSQL owns execution state **and** immutable outbound event intent. API job
+submission, worker completion/DLQ/retry and reactive scheduler dispatch insert
+`outbox_events` in the same transaction as their state changes. The API-owned
+relay publishes the stored JSON to the existing `job-created`, `task-queue` and
+`task-results` topics; no Kafka network operation runs in the state transaction.
+
+```mermaid
+flowchart LR
+    State[State mutation] --> Tx[One PostgreSQL transaction]
+    Intent[Exact event intent] --> Tx
+    Tx --> Outbox[Durable outbox]
+    Outbox --> Claim[Short lease claim / SKIP LOCKED]
+    Claim --> Relay[API relay outside DB transaction]
+    Relay --> Kafka[Kafka acknowledgment]
+    Kafka --> Mark[Mark published]
+```
+
+Retries retain the existing 1, 2, 4... second backoff. A failed attempt's
+`retryScheduledAt` equals its new queue intent's initial `available_at`; the relay
+uses database time to select due rows. Worker restarts cannot erase these rows.
+Kafka failures retain intent and defer relay attempts by 1, 2, 4... up to 30 seconds.
+A crashed relay's lease expires automatically. A cancelled job's delayed event may
+still be delivered, but the worker's job/task-state guards skip it.
+
+The relay claims **one row at a time**, up to a bounded batch per poll, so later
+rows do not wait behind Kafka sends with expiring leases. Per-claim tokens fence
+stale acknowledgments. Claims and marks use short database transactions; sends
+wait for Kafka acknowledgment outside those transactions. Scheduler listeners wait
+for their R2DBC transaction before Kafka acknowledgment and retry failures rather
+than acknowledging an unfinished asynchronous subscription.
+
+`conductor.outbox.*` startup-validated defaults:
+
+| Setting | Default | Bound |
+|---|---|---|
+| `enabled` | `true` | Disable only for controlled testing/maintenance; pending intent stays durable |
+| `poll-interval` | `500ms` | 100ms?30s |
+| `batch-size` | `50` | 1?200 |
+| `claim-timeout` | `30s` | 1s?5min; must exceed twice publish timeout |
+| `publish-timeout` | `10s` | 100ms?30s |
+
+V12 adds the outbox and generation-zero defaults on tasks/attempts without
+rewriting historical execution IDs. Upgrade API, scheduler and workers together;
+old Kafka records default to generation zero, but old service binaries are not
+expected to understand new generation-bearing contracts. V12 does not infer
+missing publication intents for pre-outbox historical records. Queue dedupe keys include task, generation
+and attempt. Generation zero preserves legacy deterministic IDs; manual DLQ
+replay increments generation and resets attempts to zero. Current DLQ timestamp
+is cleared on replay, while prior failed attempts remain. Replay resumes only the
+selected task, **not** FAIL_FAST-cancelled descendants. Existing summary eligibility
+rules can reject a replay-completed run that still contains cancelled tasks.
+Current deterministic AI evidence uses the current generation per task and explicitly
+notes excluded prior generations; generation-zero snapshot shapes remain unchanged.
+No outbox payload or captured output is added to AI context or SSE.
+
+**Delivery is at least once, not exactly once.** A Kafka acknowledgment followed
+by a crash before `published_at` can deliver the same event again. Unique intent
+keys, task locks, deterministic attempt IDs and scheduler state/generation checks
+make repeated deliveries safe for recorded execution. Lock contention remains a
+retryable consumer error rather than acknowledging possibly unfinished work.
+An external HTTP side effect followed by a process crash before DB commit may
+still repeat. Exactly-once external effects require downstream cooperation; this
+PR does not add HTTP idempotency keys.
+
+PostgreSQL is the consistency boundary because it already owns authoritative
+execution state. Kafka transactions cannot atomically commit that database state;
+in-memory timers lose intent, and Quartz/Redis queues/CDC would add another
+coordination mechanism or infrastructure unnecessarily. Delayed availability in
+the same outbox solves durable retries without a second scheduler.
+
+Published rows are retained for diagnosis; no retention/cleanup job is included.
+Payloads are limited to 32 KiB and the three execution contracts, never task
+outputs/configuration. Metrics cover pending count, publication requests/success/
+failure and latency, without IDs, payloads or error-text labels. The existing
+SSE PostgreSQL observation path remains unchanged.
+
 ## Task capabilities
 
 ```mermaid
@@ -657,7 +735,7 @@ flowchart LR
     Registry --> Handler[Typed handler]
     Handler --> Evidence[Worker persistence and failure evidence]
     Evidence --> Retry[Worker retry / DLQ]
-    Retry --> Result[After-commit TaskResultEvent]
+    Retry --> Result[Transactional task-results outbox intent]
 ```
 
 | Type | Purpose | Important limits |
@@ -689,7 +767,7 @@ The example above deliberately uses static transform input. For a dependency-bac
 
 ### Task outputs
 
-V11 adds nullable `task_executions.output_text` and `output_content_type`; V1-V10 remain unchanged. Historical executions continue to have no output. Output belongs to a COMPLETE attempt, never mutable task state or a failed attempt. The worker validates UTF-8 bytes and commits output with the successful execution/task state before its after-commit completion event can release downstream tasks. Kafka events contain no output payload. Compose shares the configured limit across API, AI and workers through `TASK_OUTPUT_MAX_BYTES`.
+V11 adds nullable `task_executions.output_text` and `output_content_type`; V1-V10 remain unchanged. Historical executions continue to have no output. Output belongs to a COMPLETE attempt, never mutable task state or a failed attempt. The worker validates UTF-8 bytes and commits output with the successful execution/task state with its transactional completion intent before the relay can release downstream tasks. Kafka events contain no output payload. Compose shares the configured limit across API, AI and workers through `TASK_OUTPUT_MAX_BYTES`.
 
 `conductor.tasks.output.max-bytes` defaults to 65,536 bytes (64 KiB), with the same hard database ceiling. Applications may configure a lower value. Oversized output fails rather than truncating. Only `application/json` and `text/plain` are supported; NOOP and DELAY produce no output. HTTP capture is explicitly opt-in through `captureResponseBody: true`; absent/false preserves bounded consumption and discard. A captured nonempty response must declare a supported UTF-8 content type. An empty captured response without a declared content type is stored as empty `text/plain`; an empty body is never a valid JSON object for TRANSFORM. Response headers, cookies and authorization values are not persisted.
 
@@ -757,7 +835,7 @@ V8 adds `tasks.task_type` (default NOOP) and bounded `tasks.task_config_json` (d
 
 Handler metrics use `task_handler_requests_total`, `task_handler_failures_total` and `task_handler_duration_seconds`, tagged only by bounded handler type/outcome. Existing completion/failure counters remain with `handler_type` replacing arbitrary task-name tags; handler timing replaces the old duplicate worker timer. Panels are included in the existing Conductor Requests dashboard.
 
-Known reliability limits remain: retry timers are in memory, after-commit Kafka publication has a crash gap without an outbox, and HTTP side effects cannot be made exactly-once by a database transaction. A POST may repeat after a crash; downstream APIs must supply their own deduplication semantics. AI semantic correctness still requires human approval. There is no generalized dataflow, secret management or dynamic plugin system.
+Execution state and event intent commit atomically through the durable outbox. HTTP side effects still cannot be made exactly-once by a database transaction. A POST may repeat after a crash; downstream APIs must supply their own deduplication semantics. AI semantic correctness still requires human approval. There is no generalized dataflow, secret management or dynamic plugin system.
 
 ## Architecture
 
@@ -914,7 +992,7 @@ POST /api/v1/jobs
 
 `failurePolicy` values:
 - `FAIL_FAST` — first dead-lettered task cancels all pending tasks, job → FAILED
-- `CONTINUE` — other tasks keep running; job → FAILED only when all terminal
+- `CONTINUE_ON_FAILURE` - independent work continues; the job is marked FAILED when failure is observed, even while independent tasks remain active.
 
 ### Other Endpoints
 
