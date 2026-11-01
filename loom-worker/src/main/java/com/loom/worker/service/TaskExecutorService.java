@@ -108,7 +108,8 @@ public class TaskExecutorService {
             return;
         }
         JobStatus jobStatus = task.getJob().getStatus();
-        if (jobStatus == JobStatus.CANCELLING || jobStatus == JobStatus.CANCELLED || jobStatus == JobStatus.COMPLETE) {
+        if (jobStatus == JobStatus.CANCELLING || jobStatus == JobStatus.CANCELLED || jobStatus == JobStatus.COMPLETE
+                || (jobStatus == JobStatus.FAILED && task.getJob().getFailurePolicy() == FailurePolicy.FAIL_FAST)) {
             return;
         }
 

@@ -10,8 +10,12 @@ import java.util.UUID;
 
 public interface JobReactiveRepository extends ReactiveCrudRepository<JobRecord, UUID> {
 
-    /** Serialize evaluations of a job so concurrent branch completions cannot miss a join. */
-    @Query("SELECT * FROM jobs WHERE id = :id FOR UPDATE")
+    /**
+     * Serialize state updates without blocking task foreign-key key-share checks.
+     * FOR UPDATE would create a job/task lock cycle when cancellation waits for
+     * a worker that updates its task twice in the same transaction.
+     */
+    @Query("SELECT * FROM jobs WHERE id = :id FOR NO KEY UPDATE")
     Mono<JobRecord> findByIdForUpdate(UUID id);
 
     @Modifying

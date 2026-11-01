@@ -2,8 +2,6 @@ package com.tarunkishore.loom_api.repository;
 
 import com.loom.common.model.Job;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
-import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -16,8 +14,8 @@ import java.util.UUID;
 
 public interface JobRepository extends JpaRepository<Job, UUID> {
 
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("select j from Job j where j.id = :id")
+    // Serialize job mutations without conflicting with workers' FK KEY SHARE checks.
+    @Query(value = "select * from jobs where id = :id for no key update", nativeQuery = true)
     Optional<Job> findByIdForUpdate(@Param("id") UUID id);
 
     List<Job> findAllBy(Pageable pageable);

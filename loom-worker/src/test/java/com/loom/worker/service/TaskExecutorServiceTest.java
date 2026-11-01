@@ -212,6 +212,30 @@ class TaskExecutorServiceTest {
     }
 
     @Test
+    void failedFailFastJobSkipsAlreadyPublishedPendingRetry() throws Exception {
+        var task = pendingTask();
+        task.getJob().setStatus(JobStatus.FAILED);
+        task.getJob().setFailurePolicy(FailurePolicy.FAIL_FAST);
+        when(taskRepo.findLockedById(taskId)).thenReturn(Optional.of(task));
+        service.process(new TaskEvent(jobId, taskId, "late-retry", 2, 1));
+        verify(taskHandler, never()).execute(any());
+        verifyNoInteractions(outbox);
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.PENDING);
+    }
+
+    @Test
+    void failedContinuePolicyJobStillExecutesIndependentPendingWork() throws Exception {
+        var task = pendingTask();
+        task.getJob().setStatus(JobStatus.FAILED);
+        task.getJob().setFailurePolicy(FailurePolicy.CONTINUE_ON_FAILURE);
+        when(taskRepo.findLockedById(taskId)).thenReturn(Optional.of(task));
+        service.process(new TaskEvent(jobId, taskId, "independent", 2, 0));
+        verify(taskHandler).execute(any());
+        verify(outbox).taskResult(any());
+        assertThat(task.getStatus()).isEqualTo(TaskStatus.COMPLETE);
+    }
+
+    @Test
     void duplicateExecutionId_skipsExecution() throws Exception {
         when(taskRepo.findJobStatusByTaskId(taskId)).thenReturn(Optional.of(JobStatus.RUNNING.name()));
         when(executionRepo.existsByExecutionId(any())).thenReturn(true);

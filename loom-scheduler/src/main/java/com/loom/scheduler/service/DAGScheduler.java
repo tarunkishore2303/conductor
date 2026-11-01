@@ -66,9 +66,9 @@ public class DAGScheduler {
 
     private Mono<Void> onTaskDeadLettered(JobRecord job) {
         if (job.failurePolicy() == FailurePolicy.FAIL_FAST) {
-            return taskRepo.findByJobId(job.id())
-                .filter(task -> task.status() == TaskStatus.PENDING)
-                .concatMap(task -> taskRepo.updateStatus(task.id(), TaskStatus.CANCELLED.name(), task.version()))
+            // Do not select versions and then cancel row-by-row: a worker can commit a
+            // retry while cancellation waits for its row lock, invalidating the old version.
+            return taskRepo.cancelPendingByJobId(job.id())
                 .then(updateJobStatus(job, JobStatus.FAILED));
         }
         return checkJobCompletion(job);

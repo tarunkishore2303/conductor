@@ -35,4 +35,13 @@ public interface TaskReactiveRepository extends ReactiveCrudRepository<TaskRecor
     @Modifying
     @Query("UPDATE tasks SET status = :status, version = version + 1, updated_at = NOW() WHERE id = :id AND version = :version")
     Mono<Integer> updateStatus(UUID id, String status, Long version);
+
+    /** PostgreSQL rechecks PENDING after waiting for a concurrently executing worker's row lock. */
+    @Modifying
+    @Query("""
+        /* cancel-pending-tasks */
+        UPDATE tasks SET status = 'CANCELLED', version = version + 1, updated_at = NOW()
+        WHERE job_id = :jobId AND status = 'PENDING'
+        """)
+    Mono<Integer> cancelPendingByJobId(UUID jobId);
 }

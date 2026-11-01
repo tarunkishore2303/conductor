@@ -19,6 +19,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -137,6 +138,45 @@ class SchedulerOutboxIT {
         var event = new TaskEvent(job, task, "task", 2, 0, 0);
         assertThatThrownBy(() -> writer.taskQueue(event).block(Duration.ofSeconds(10))).isInstanceOf(RuntimeException.class);
         assertThat(count("SELECT count(*) FROM outbox_events")).isZero();
+    }
+
+    @Test void failFastCancelsRetryCommittedWhileWaitingForWorkerRowLock() {
+        UUID job = job(), failed = task(job, "DEAD_LETTERED", 0), retry = task(job, "PENDING", 0);
+        sql("UPDATE jobs SET status='RUNNING'");
+        UUID execution = UUID.randomUUID();
+        database.sql("INSERT INTO task_executions(id,task_id,execution_id,status,execution_generation) VALUES(:id,:task,:execution,'FAILED',0)")
+            .bind("id", UUID.randomUUID()).bind("task", failed).bind("execution", execution).fetch().rowsUpdated().block();
+        var event = new TaskResultEvent(job, failed, execution, TaskStatus.DEAD_LETTERED, null);
+        var locked = Sinks.<Void>one();
+        var release = Sinks.<Void>one();
+        // Hold the same task row that a real worker holds during execution, then commit
+        // another PENDING retry with a newer version while FAIL_FAST is waiting on it.
+        var worker = transactions.transactional(
+            database.sql("UPDATE tasks SET status='RUNNING',version=version+1 WHERE id=:id")
+                .bind("id", retry).fetch().rowsUpdated()
+                .doOnSuccess(ignored -> locked.tryEmitEmpty())
+                .then(release.asMono())
+                .then(database.sql("UPDATE tasks SET status='PENDING',version=version+1 WHERE id=:id")
+                    .bind("id", retry).fetch().rowsUpdated()).then()).toFuture();
+        CompletableFuture<Void> cancellation = null;
+        try {
+            locked.asMono().block(Duration.ofSeconds(5));
+            cancellation = scheduler.onTaskResult(event).toFuture();
+            // Observe the actual PostgreSQL lock wait instead of relying on a timing sleep.
+            long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            long waiters = 0;
+            while (waiters == 0 && System.nanoTime() < deadline) {
+                waiters = count("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%cancel-pending-tasks%'");
+            }
+            assertThat(waiters).isPositive();
+        } finally {
+            release.tryEmitEmpty();
+            worker.orTimeout(10, TimeUnit.SECONDS).join();
+            if (cancellation != null) cancellation.orTimeout(10, TimeUnit.SECONDS).join();
+        }
+        assertThat(status(job)).isEqualTo("FAILED");
+        assertThat(database.sql("SELECT status FROM tasks WHERE id=:id").bind("id", retry)
+            .map((row, meta) -> row.get(0, String.class)).one().block()).isEqualTo("CANCELLED");
     }
 
     private static TaskResultEvent completion(UUID job, UUID task, int generation) {

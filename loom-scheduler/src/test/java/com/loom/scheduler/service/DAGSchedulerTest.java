@@ -95,10 +95,10 @@ class DAGSchedulerTest {
     @Test void failFastCancelsPendingAndMarksFailed() {
         job(JobStatus.RUNNING, FailurePolicy.FAIL_FAST);
         var event = result(TaskStatus.DEAD_LETTERED); current(event, true);
-        when(tasks.findByJobId(jobId)).thenReturn(Flux.just(task(first, TaskStatus.DEAD_LETTERED, 0), task(second, TaskStatus.PENDING, 0)));
-        when(tasks.updateStatus(second, "CANCELLED", 0L)).thenReturn(Mono.just(1));
+        when(tasks.cancelPendingByJobId(jobId)).thenReturn(Mono.just(1));
         StepVerifier.create(scheduler.onTaskResult(event)).verifyComplete();
-        verify(tasks).updateStatus(second, "CANCELLED", 0L);
+        verify(tasks).cancelPendingByJobId(jobId);
+        verify(tasks, never()).findByJobId(any());
         verify(jobs).updateStatus(jobId, "FAILED", 0L);
         verifyNoInteractions(outbox);
     }

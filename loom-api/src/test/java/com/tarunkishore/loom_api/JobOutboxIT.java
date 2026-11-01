@@ -32,6 +32,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -137,6 +138,54 @@ class JobOutboxIT {
                     .containsExactlyInAnyOrder("replayed", "conflict");
         }
         assertThat(taskRepository.findById(task.getId()).orElseThrow().getExecutionGeneration()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from outbox_events where dedupe_key=?", Integer.class,
+                "task-queue:" + task.getId() + ":1:0")).isEqualTo(1);
+    }
+
+    @Test void duplicateReplayWaitingForActiveWorkerDoesNotDeadlockParentForeignKey() throws Exception {
+        Task task = deadLettered();
+        dlq.retryTask(task.getId());
+        var workerLocked = new CountDownLatch(1);
+        var releaseWorker = new CountDownLatch(1);
+        var workerPid = new AtomicInteger();
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var worker = executor.submit(() -> transaction.executeWithoutResult(status -> {
+                workerPid.set(jdbc.queryForObject("select pg_backend_pid()", Integer.class));
+                jdbc.update("update tasks set status='RUNNING',version=version+1 where id=?", task.getId());
+                workerLocked.countDown();
+                try {
+                    if (!releaseWorker.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Worker release timed out");
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(interrupted);
+                }
+                // A second update to our own tuple rechecks its parent foreign key.
+                // FOR UPDATE on the job would deadlock against this KEY SHARE check.
+                jdbc.update("update tasks set status='PENDING',version=version+1 where id=?", task.getId());
+            }));
+            java.util.concurrent.Future<String> duplicate = null;
+            try {
+                assertThat(workerLocked.await(5, TimeUnit.SECONDS)).isTrue();
+                duplicate = executor.submit(() -> {
+                    try { dlq.retryTask(task.getId()); return "replayed"; }
+                    catch (IllegalStateException expected) { return "conflict"; }
+                });
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                long waiting = 0;
+                while (waiting == 0 && System.nanoTime() < deadline) {
+                    waiting = jdbc.queryForObject("select count(*) from pg_stat_activity "
+                            + "where ? = any(pg_blocking_pids(pid))", Long.class, workerPid.get());
+                }
+                assertThat(waiting).as("duplicate replay is waiting for the worker task row").isPositive();
+            } finally {
+                releaseWorker.countDown();
+                worker.get(10, TimeUnit.SECONDS);
+            }
+            assertThat(duplicate.get(10, TimeUnit.SECONDS)).isEqualTo("conflict");
+        }
+        Task current = taskRepository.findById(task.getId()).orElseThrow();
+        assertThat(current.getStatus()).isEqualTo(TaskStatus.PENDING);
+        assertThat(current.getExecutionGeneration()).isEqualTo(1);
         assertThat(jdbc.queryForObject("select count(*) from outbox_events where dedupe_key=?", Integer.class,
                 "task-queue:" + task.getId() + ":1:0")).isEqualTo(1);
     }
