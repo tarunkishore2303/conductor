@@ -684,10 +684,10 @@ than acknowledging an unfinished asynchronous subscription.
 | Setting | Default | Bound |
 |---|---|---|
 | `enabled` | `true` | Disable only for controlled testing/maintenance; pending intent stays durable |
-| `poll-interval` | `500ms` | 100ms?30s |
-| `batch-size` | `50` | 1?200 |
-| `claim-timeout` | `30s` | 1s?5min; must exceed twice publish timeout |
-| `publish-timeout` | `10s` | 100ms?30s |
+| `poll-interval` | `500ms` | 100ms-30s |
+| `batch-size` | `50` | 1-200 |
+| `claim-timeout` | `30s` | 1s-5min; must exceed twice publish timeout |
+| `publish-timeout` | `10s` | 100ms-30s |
 
 V12 adds the outbox and generation-zero defaults on tasks/attempts without
 rewriting historical execution IDs. Upgrade API, scheduler and workers together;
