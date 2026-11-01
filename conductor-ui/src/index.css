@@ -147,6 +147,22 @@ footer span:first-child { font-family: Consolas, monospace; letter-spacing: 2px;
 .intel-match-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
 .intel-match-heading h3 { font-size: 13px; font-weight: 500; margin: 0; }
 .intel-match .intel-facts { margin-bottom: 0; }
+.cp-panel textarea { display: block; width: 100%; resize: vertical; min-height: 90px; padding: 12px; font: inherit; line-height: 1.6; color: #dbe3ee; background: #0e151e; border: 1px solid #40516a; border-radius: 6px; }
+.cp-panel textarea:focus-visible { outline: 2px solid #82b5ff; outline-offset: 2px; }
+.cp-label { display: block; margin: 16px 0 8px; font-size: 12px; color: #b7c8de; }
+.cp-submit { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 10px; }
+.cp-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.cp-suggestions button { font-size: 11px; background: #141e2b; padding: 5px 9px; }
+.cp-answer { border-top: 1px solid #344357; margin-top: 24px; padding-top: 18px; }
+.cp-answer > p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cp-answer h3, .opt-evidence h3, .opt-interpretation h3 { font-size: 14px; color: #d6e5fa; margin: 0 0 14px; }
+.cp-answer h4, .opt-candidate h4 { font-size: 12px; color: #b9cfe9; margin: 16px 0 8px; }
+.cp-evidence { margin-top: 22px; font-size: 12px; }
+.cp-evidence summary { cursor: pointer; color: #bad5f8; }
+.cp-evidence-item { border: 1px solid #344357; border-radius: 6px; padding: 14px 18px; margin-top: 14px; background: #101923; }
+.cp-evidence-item dd { overflow-wrap: anywhere; }
+.opt-interpretation { border-top: 1px solid #344357; padding-top: 20px; margin-top: 24px; }
+.opt-hash { display: block; overflow-wrap: anywhere; margin-top: 8px; }
 @media (max-width: 1050px) { .intel-columns { grid-template-columns: 1fr; } .intel-interpretation { padding: 20px 0 0; border-left: 0; border-top: 1px solid #344357; } }
 @media (max-width: 700px) { .intel-heading { align-items: start; flex-direction: column; } .intel-body { padding: 16px; } .intel-facts > div { flex-direction: column; gap: 4px; } .intel-facts dd { text-align: left; } }
 @media (max-width: 1050px) {

@@ -97,7 +97,7 @@ is available at http://localhost:8080. Never put a Compose hostname in a browser
 URL: only nginx resolves `loom-api`. No CORS changes are needed. A custom absolute
 `VITE_API_BASE_URL` requires the target API's explicit CORS policy; it is a build-time
 setting, not an nginx runtime setting. The nginx API proxy accepts GET/HEAD,
-with only the two intelligence-generation POST exceptions documented below.
+with only the narrowly scoped intelligence POST exceptions documented below.
 If the API container is recreated separately, restart the UI container to refresh
 nginx's upstream hostname resolution (`.\scripts\compose.ps1 restart conductor-ui`).
 
@@ -105,7 +105,7 @@ New bounded reads: `GET /api/v1/workflows?limit=50` and
 `GET /api/v1/jobs?limit=50` (limits 1–100, newest first). Existing detail APIs are
 unchanged. Run lists omit task payloads; normal UI views never render task outputs
 or capability configuration. This is an unauthenticated local MVP: no editor,
-execution buttons, Copilot/optimization UI, attempt history, runtime DAG, or authentication.
+execution buttons, a general attempt-history view, runtime DAG, or authentication.
 The UI port binds to loopback.
 
 ### Run Intelligence
@@ -138,7 +138,70 @@ never execute workflows. Job/workflow creation, proposal approval, indexing,
 synthesis, DELETE, PUT and PATCH remain blocked by the UI proxy. The Vite dev
 proxy is a development convenience, not this production method restriction.
 No task outputs, configuration, prompts, vector values or raw error messages are
-rendered. Next: Copilot and Workflow Optimization UI in a separate PR.
+rendered.
+
+### Ask Conductor
+
+Run detail includes a single-turn, read-only operator query panel. A question
+(1–2000 trimmed characters) is scoped to that run; supported suggestions inspect
+retries, failed tasks, timing and historical incidents. Questions never retry,
+cancel, schedule or execute anything. There is no chat history, local storage,
+streaming or new conversation memory.
+
+Answers distinguish `OLLAMA_INTERPRETATION` (local Ollama interpretation) from
+`DETERMINISTIC_NOTICE` (for example, the expected read-only refusal). Tools used,
+cited evidence IDs and expandable evidence remain inspectable. Known safe
+metadata is projected from bounded tool JSON; raw errors, outputs, configuration
+and incident-document blobs are omitted. Only actual run/workflow references get
+links to existing UI routes. No HTML or model-generated commands are executed.
+
+<details>
+<summary>Live Copilot and cited evidence (November 1, 2026)</summary>
+
+![Run-scoped Copilot answer with inspectable retry evidence](docs/screenshots/copilot.png)
+
+This real model response reports two retries but adds an unsupported legacy-history
+caveat despite complete retry evidence. Interpretation can be wrong; the cited
+Conductor facts remain separately inspectable.
+
+</details>
+
+### Workflow Optimization
+
+Workflow detail reads its latest stored advisory report first. Only an explicit
+Generate optimization report action POSTs when no report exists. Java analyzers
+calculate candidates and numeric evidence; Ollama interprets that evidence.
+History bounds, eligible/excluded samples, timing limitations, candidate IDs and
+snapshot metadata stay visible and separate from interpretation. Rates describe
+observed executions, not probabilities; active attempt time is not wall-clock or
+critical-path contribution. Structural observations do not prove business
+independence.
+
+Optimization is **advisory only**: no Apply, Accept, Rewrite or execution control.
+Insufficient-history and no-candidate reports are valid deterministic results and
+need no Ollama call. Stored reports remain readable during outages. New reports
+with candidates and normal Copilot answers need the existing local model;
+deterministic Copilot refusals work without it. Reports are immutable; there is
+no forced-regeneration UI or polling.
+
+<details>
+<summary>Stored workflow optimization report (November 1, 2026)</summary>
+
+![Six deterministic optimization candidates and separate local Ollama interpretation](docs/screenshots/workflow-optimization.png)
+
+Captured from the running Control Plane, including bounded history, numeric
+candidate evidence and advisory interpretation. Stored reads also work offline.
+
+</details>
+
+The only additional nginx POST exceptions are `/api/v1/ai/copilot/query` and
+`/api/v1/ai/workflows/{workflowId}/optimization`. Copilot's dedicated proxy timeout
+is 210 seconds, covering its default 180-second backend deadline; optimization
+uses the existing 180-second intelligence timeout. Workflow/run mutations,
+proposal approval, incident indexing/synthesis and DELETE/PUT/PATCH stay blocked.
+The proxy is not authentication; development Vite proxying is not this production
+method boundary. No prompts, tools, analyzers, fingerprints or model settings
+change in this UI layer.
 
 ### Live execution updates
 
@@ -178,7 +241,7 @@ history or cross-replica publisher. Each API replica would independently observe
 the shared database, multiplying observation work; this is not a shared fan-out
 design. Reconnection always recovers through REST and ignores replay cursors.
 No WebSockets, AI streaming, new topics, migrations, Redis pub/sub or authentication
-are introduced. Next: Control Plane intelligence views, in a separate PR.
+are introduced. Execution SSE remains separate from completed AI responses.
 
 ## AI Workflow Generation
 
