@@ -1,1253 +1,422 @@
 # Conductor
 
 [![Conductor CI](https://github.com/tarunkishore2303/conductor/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tarunkishore2303/conductor/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**Conductor evolves [Project Loom](https://github.com/tarunkishore2303/project-loom) into an intelligent distributed workflow platform.** This repository preserves Loom's original Git history. The orchestration modules retain their `loom-*` names while the platform evolves.
+**A distributed workflow orchestration platform with durable execution, failure intelligence and evidence-backed local AI.**
 
-The current release includes an isolated Ollama-powered AI service for structured workflow proposals, explicit approval, failure interpretation, and historical incident retrieval. Deterministic validation and execution remain in Conductor. Workers execute typed NOOP, DELAY, HTTP_REQUEST and TRANSFORM capabilities through an IoC handler registry.
+[![Conductor Control Plane: typed workflow tasks, parallel branches and a dependency join](docs/screenshots/workflow-dag.png)](https://github.com/tarunkishore2303/conductor/releases/tag/v1.0.0)
 
-See [runtime upgrade decisions and verification](docs/runtime-upgrade.md) for the
-Spring Boot 4, Java 25, and Podman migration details.
+[Watch the technical demo](https://github.com/tarunkishore2303/conductor/releases/download/v1.0.0/Conductor-v1.0.0-technical-1080p.mp4) | [Short product tour](https://github.com/tarunkishore2303/conductor/releases/download/v1.0.0/Conductor-v1.0.0-linkedin-1080p.mp4) | [v1.0.0 release](https://github.com/tarunkishore2303/conductor/releases/tag/v1.0.0)
 
-Distributed async job orchestration engine — a portfolio workflow engine built with Spring Boot, Kafka, Redis, and PostgreSQL.
+## Why Conductor
 
-Submit a DAG of tasks via REST. Loom validates the graph, persists it, and executes tasks across horizontally-scaled workers with distributed locking, exponential backoff retry, dead-letter queuing, and real-time observability.
+A workflow engine becomes interesting when a worker crashes, retries must survive
+restarts, or a database commit succeeds while Kafka is unavailable. Conductor
+makes those boundaries explicit, then adds intelligence that can explain the
+recorded evidence without controlling execution.
 
----
+The platform evolved from [Project Loom](https://github.com/tarunkishore2303/project-loom)
+and preserves its original Git history and `loom-*` module names.
+
+- **Deterministic orchestration:** validated DAGs, typed task handlers and explicit failure policies.
+- **Durable distributed execution:** PostgreSQL state and event intent, leased outbox delivery, Kafka and Redis coordination.
+- **Evidence-backed intelligence:** deterministic facts first; optional local Ollama interpretation second.
+
+This is a local-first portfolio and study platform, not an authenticated SaaS,
+a Temporal replacement or an autonomous agent system.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    UI[React Control Plane] -->|REST / SSE| API[loom-api]
+    API -->|state + event intent in one transaction| PG[(PostgreSQL + pgvector + outbox)]
+    PG --> Relay[API-owned outbox relay]
+    Relay -->|acknowledged publication| Kafka[Kafka]
+    Kafka --> Scheduler[Reactive DAG scheduler]
+    Kafka --> Workers[Workers]
+    Scheduler -->|state + dispatch intent| PG
+    Workers -->|attempt / output / retry / result intent| PG
+    Workers --> Redis[(Redis / Redisson task locks)]
+    API -->|bounded sanitized evidence| AI[Isolated loom-ai]
+    AI --> Ollama[Optional local Ollama]
+```
+
+| Module | Responsibility |
+|---|---|
+| `loom-common` | Execution models, event contracts, deterministic identity and shared outbox writer |
+| `loom-api` | Workflow/run APIs, validation, persistence, intelligence snapshots, SSE and outbox relay |
+| `loom-scheduler` | R2DBC DAG readiness and transactional dispatch intent |
+| `loom-worker` | Typed capability execution, locks, attempt persistence, retries and DLQ |
+| `loom-monitor` | Read-only execution statistics |
+| `loom-ai` | Local model adapters, structured responses and dedicated output validation |
+| `loom-observability` | Shared low-cardinality operation instrumentation |
+| `loom-task-capabilities` | Typed configuration, capability catalog and safety validation |
+| `conductor-ui` | React/TypeScript Control Plane |
+
+## How execution works
+
+1. Create a workflow template, then submit a separate run through REST.
+2. Conductor validates capability configuration, direct dataflow references and DAG invariants.
+3. The API commits the job, tasks, dependencies and `job-created` outbox intent together.
+4. The relay publishes committed intent; the scheduler transaction records ready-task dispatches.
+5. A worker acquires its Redisson task lock, resolves declared inputs and executes the registered handler.
+6. Attempt results, bounded successful output and the next event intent commit together.
+7. The scheduler releases eligible dependants or applies the failure policy.
+
+`FAIL_FAST` cancels pending tasks after terminal failure. `CONTINUE_ON_FAILURE`
+permits independent work to continue; the job may already be marked FAILED while
+that work is active. A cancellation request prevents future worker starts but
+does not interrupt a running handler; see the cancellation limitation below.
 
 ## Control Plane
 
-The React/TypeScript/Vite Control Plane exposes workflow definitions, run state,
-and run intelligence at **http://localhost:3001**. Execution remains read-only.
-Stored intelligence and execution views work without Ollama; explicit generation
-uses the optional local AI profile.
+Open **http://localhost:3001** after Compose starts.
 
-### Control Plane in action
+| Screen | What it exposes |
+|---|---|
+| Workflows | Templates, metadata and read-only DAG visualization |
+| Runs | Recent runs, task states, capability types and retry counters |
+| Run intelligence | Execution summaries, failure evidence and similar historical incidents |
+| Ask Conductor | A single-turn, read-only question with inspectable tool evidence |
+| Workflow optimization | Stored advisory candidates and separate model interpretation |
 
-These screenshots come from real local executions captured on October 24–26,
-2026. IDs and timestamps are demo evidence; the images reflect the UI at capture
-time. The intelligence views below were captured with **Ollama stopped**, showing
-that persisted results and indexed incident retrieval remain available.
+REST is authoritative. Active run detail uses SSE invalidation notifications to
+refetch the REST snapshot; reconnects recover through REST, with five-second
+polling fallback when streaming is unavailable. Terminal state closes the stream.
+SSE has no durable replay and is process-local. Task state can remain PENDING
+while a handler runs because its transaction commits at attempt completion.
 
-**Workflow structure:** a read-only DAG showing typed capabilities, dependencies,
-parallel branches and a downstream join.
-
-![Workflow detail showing an HTTP, transform, parallel delay/notification, and NOOP join DAG](docs/screenshots/workflow-dag.png)
+The UI does not create/edit/execute workflows or expose captured outputs. Its four
+POST exceptions compute intelligence only: Copilot, summary, failure analysis
+and optimization. Workflow/job mutations, approval, replay, indexing, synthesis,
+PUT, PATCH and DELETE remain blocked through UI nginx. Use the REST collection
+for manual workflow creation, approval and execution.
 
 <details>
-<summary>View live execution, execution summary, and failure intelligence</summary>
+<summary>Real execution and intelligence screenshots</summary>
 
-**Live execution:** the run detail receives SSE invalidation hints and refreshes
-the authoritative REST snapshot. A running job may still show PENDING task records
-because the worker commits its task state at attempt completion.
+![SSE run detail with recorded task state and retry counters](docs/screenshots/live-run.png)
+![Deterministic summary facts separated from local model interpretation](docs/screenshots/execution-summary.png)
+![Failure evidence, local interpretation and scored historical incidents](docs/screenshots/failure-intelligence.png)
+![Copilot answer with inspected evidence](docs/screenshots/copilot.png)
 
-![Running workflow with Live SSE indicator, task states, and retry counters](docs/screenshots/live-run.png)
+These are real local captures. The Copilot image includes an unsupported legacy-history
+caveat despite complete retry evidence: model prose can be wrong even when counts
+are correct. The cited facts are separately inspectable. Similarity scores and
+model confidence are not probabilities.
 
-**Execution summary:** deterministic counts and recorded timing remain separate
-from the stored local Ollama interpretation.
-
-![Completed run with Conductor summary facts alongside local Ollama interpretation](docs/screenshots/execution-summary.png)
-
-**Failure intelligence:** persisted attempt/DLQ evidence, model interpretation,
-and real historical incident links. Model confidence and similarity scores are
-not probabilities.
-
-![Failed run with retry evidence, separate model interpretation, and scored historical incidents](docs/screenshots/failure-intelligence.png)
+![Deterministic optimization candidates and advisory interpretation](docs/screenshots/workflow-optimization.png)
 
 </details>
 
+## Task capabilities and dataflow
+
+| Type | Purpose | Important boundaries |
+|---|---|---|
+| `NOOP` | Orchestration and compatibility demos | Simulated 50 ms work |
+| `DELAY` | A bounded wait | 0-30,000 ms |
+| `HTTP_REQUEST` | HTTP GET/POST | Default request 16 KiB, response 64 KiB; timeout at most 10 s; redirects disabled |
+| `TRANSFORM` | Deterministic JSON_SELECT / JSON_RENAME | Static JSON or one whole direct-dependency output; no scripts or expressions |
+
+Handlers are registered through Spring IoC. They execute one capability and return
+its result; workers own persistence, locking, retries, DLQ and publication intent.
+
+```mermaid
+flowchart LR
+    Get[HTTP GET: captureResponseBody=true] -->|whole bounded JSON| Transform[TRANSFORM: inputTaskId=fetch]
+    Transform -->|whole bounded JSON| Post[HTTP POST: bodyTaskId=select]
+```
+
+Output belongs to a successful `TaskExecution`, not mutable task state. HTTP capture
+is **opt-in** and supports bounded UTF-8 JSON/plain text. Persisted output has a
+64 KiB hard ceiling; failed attempts expose no successful output. Inputs may name
+one declared **direct dependency in the same run**. Static transforms and static
+POST bodies remain supported.
+
+Conductor does not implement a general variable/expression language, JSONPath,
+interpolation, dynamic fan-out, shell, JavaScript, Python or SQL execution.
+Captured outputs are persisted in the database and must not contain secrets.
+They are excluded from Kafka/outbox payloads, normal UI views and AI intelligence.
+
+## Durable execution and transactional outbox
+
+PostgreSQL is authoritative for execution state **and exact serialized event intent**.
+Those writes share one transaction in API, worker and reactive scheduler paths.
+The existing topics remain `job-created`, `task-queue` and `task-results`.
+
+```mermaid
+flowchart LR
+    State[State mutation + event intent] --> Commit[PostgreSQL commit]
+    Commit --> Claim[SKIP LOCKED: short lease]
+    Claim --> Send[Publish to Kafka outside DB transaction]
+    Send --> Mark[Mark published after broker acknowledgment]
+```
+
+A relay claims one due row at a time, up to a bounded batch, using expiring leases
+and per-claim fencing tokens. Failed publication keeps the row and retries with
+bounded backoff. A crash after Kafka ACK but before `published_at` can publish the
+same event again: this is expected **at-least-once delivery**. Deterministic dedupe
+keys, task locks, recorded attempt identity and consumer state checks tolerate it.
+Published rows are retained for diagnosis.
+
+```text
+failed attempt
+  -> TaskExecution FAILED + retryScheduledAt
+  -> Task PENDING + future task-queue outbox row
+  -> COMMIT
+  -> available_at reached
+  -> relay -> Kafka -> next worker attempt
+```
+
+Retry delays retain 1, 2, 4... seconds. Initial `available_at` equals the persisted
+`retryScheduledAt`; scheduling is durable in PostgreSQL rather than worker memory.
+Default relay settings (`conductor.outbox.*`) are poll 500 ms, batch 50, lease 30 s
+and publish timeout 10 s. Leases must exceed twice the publish timeout. Payloads
+are limited to 32 KiB and never include task output/configuration.
+
+Initial execution uses generation 0, attempts 0, 1, ...; manual DLQ replay increments
+the generation and starts at attempt 0 again. Generation zero preserves historical
+UUIDs derived from `taskId-attempt`; later identities use `taskId:generation:attempt`.
+Queue dedupe includes task/generation/attempt; result dedupe includes execution ID
+and status. Replay creates fresh attempts without sacrificing duplicate-delivery
+idempotency. Old evidence remains stored; current intelligence explicitly excludes
+prior replay generations. Replay resumes only the selected task, not cancelled descendants.
+
+This is not distributed exactly once. An external HTTP side effect followed by a
+crash before completion commit can repeat after redelivery. Exactly-once external
+effects require downstream cooperation/idempotency keys, outside v1.0.
+
+V1-V12 migrations are owned by `loom-api`. Never edit a merged migration. Upgrade
+API, scheduler and workers together; legacy Kafka records default to generation zero.
+V12 does not invent publication intent for historical pre-outbox gaps.
+
+## Failure intelligence and incident memory
+
+Java collects bounded attempt, retry, timing, error-type and DLQ facts. Ollama may
+interpret them; immutable snapshots persist and are reused by stable context hash.
+Summaries require settled COMPLETE/FAILED runs; failure analysis requires settled
+failure evidence. GET reads stored results without generating anything.
+
+Incident memory uses local `nomic-embed-text:v1.5` embeddings and PostgreSQL
+`vector(768)`. Retrieval returns real historical run/analysis references and cosine
+similarity scores, not probability or proof of a common cause. The current run must
+already have analyzed/indexed evidence. Already-indexed retrieval needs no model call.
+Optional synthesis stays evidence-backed; it is not a separate UI feature.
+
+## Copilot and optimization
+
+**Copilot is read-only and single-turn:** question -> bounded allowlisted read tools
+-> structured evidence -> local interpretation with citations. It cannot retry,
+cancel, schedule, mutate workflows, call workers or execute SQL. Deterministic
+read-only notices are distinguished from `OLLAMA_INTERPRETATION` answers.
+
+**Optimization is advisory:** workflow structure + bounded explicitly linked history
+-> deterministic Java analyzers -> candidates -> optional Ollama explanation.
+Candidates cover slow tasks, retries, failures, DLQ, duration imbalance and structural
+parallel-execution observations. The latter do not establish business independence.
+Recorded active attempt time is not workflow wall-clock or critical-path contribution.
+Insufficient history/no candidates uses a deterministic path without inference.
+There is no Apply endpoint or automatic workflow rewrite.
+
+## AI workflow generation and trust model
+
+```text
+description -> structured proposal -> capability + dataflow + DAG validation
+            -> persisted preview -> explicit approval -> separate execution
+```
+
+Manual creation and AI approval share normal WorkflowService validation/persistence.
+Generation and approval never execute a job. Every model response is untrusted and
+passes dedicated validators; Java calculates authoritative counts, rates and timing.
+
+- PostgreSQL is truth; Kafka transports events at least once; consumers tolerate duplicates.
+- AI interprets bounded sanitized evidence and has no execution authority.
+- Task outputs stay outside intelligence surfaces.
+- Copilot is read-only; optimization is advisory.
+- Ollama is optional. Execution, stored intelligence and indexed retrieval remain
+  usable during an outage; fresh model-dependent generation returns safely unavailable.
+
+Supported local models are `qwen2.5-coder:7b` and `nomic-embed-text:v1.5`. No cloud
+fallback, cloud provider or AI API key is required. Compose sets `OLLAMA_NO_CLOUD=true`.
+
+## Local quick start
+
+Requirements: Docker with Compose, or Podman with standalone Docker Compose.
+Java 25 and Python 3.13 are needed for host-side build/tests; Node 24 for UI development.
+The container build uses the checked-in Gradle wrapper.
+
+```bash
+git clone https://github.com/tarunkishore2303/conductor.git
+cd conductor
+docker compose up --build -d
+```
+
+Windows/Podman equivalent:
+
 ```powershell
+podman machine start
 .\scripts\compose.ps1 up --build -d
 ```
 
-For frontend development, start the API stack, then:
+| Surface | URL |
+|---|---|
+| Control Plane | http://localhost:3001 |
+| API / Swagger | http://localhost:8080/swagger-ui.html |
+| API health | http://localhost:8080/actuator/health |
+| Monitor statistics | http://localhost:8083/monitor/stats |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 (local defaults `admin` / `admin`) |
+
+The UI binds loopback; several other Compose development ports bind host interfaces.
+This is **not a safely public deployment**. Do not expose the stack to the internet:
+there is no authentication, tenant isolation or production secret management.
+Development database credentials are local defaults, not deployment secrets.
+
+For optional AI, explicitly install the existing models:
 
 ```bash
-cd conductor-ui
-npm ci
-npm run dev
-# http://localhost:5173
-npm run build
-npm test
+AI_ENABLED=true docker compose --profile ai up --build -d
+docker compose --profile ai exec ollama ollama pull qwen2.5-coder:7b
+docker compose --profile ai exec ollama ollama pull nomic-embed-text:v1.5
 ```
-
-Routes: `/workflows`, `/workflows/:workflowId`, `/runs`, `/runs/:jobId`.
-Workflow details include a read-only, automatically laid-out dependency graph.
-Run details show task status, capability, retry counters/limits, and record
-created/updated timestamps. These timestamps are **not active attempt durations**.
-Active runs (`CREATED`, `RUNNING`, `CANCELLING`) fetch an initial REST snapshot,
-then open `GET /api/v1/jobs/{jobId}/events` using browser EventSource. Known SSE
-notifications coalesce into REST snapshot refreshes; healthy streams do not poll.
-The page shows Live, Connecting, or Fallback polling. EventSource reconnects
-natively, and every open refetches REST to recover missed changes. Errors or
-unavailable EventSource enable five-second polling while active; reconnecting
-successfully disables it. Terminal REST state and navigation close the stream.
-Lists retain manual refresh and show up to 50 items.
-
-```mermaid
-flowchart LR
-    Browser --> UI[React Control Plane]
-    UI -->|same-origin REST /api| Proxy[Vite dev proxy / nginx]
-    Proxy --> API[loom-api]
-    API -->|SSE invalidation hints| UI
-```
-
-The default `VITE_API_BASE_URL=/api/v1` works through both proxies. The API itself
-is available at http://localhost:8080. Never put a Compose hostname in a browser
-URL: only nginx resolves `loom-api`. No CORS changes are needed. A custom absolute
-`VITE_API_BASE_URL` requires the target API's explicit CORS policy; it is a build-time
-setting, not an nginx runtime setting. The nginx API proxy accepts GET/HEAD,
-with only the narrowly scoped intelligence POST exceptions documented below.
-If the API container is recreated separately, restart the UI container to refresh
-nginx's upstream hostname resolution (`.\scripts\compose.ps1 restart conductor-ui`).
-
-New bounded reads: `GET /api/v1/workflows?limit=50` and
-`GET /api/v1/jobs?limit=50` (limits 1–100, newest first). Existing detail APIs are
-unchanged. Run lists omit task payloads; normal UI views never render task outputs
-or capability configuration. This is an unauthenticated local MVP: no editor,
-execution buttons, a general attempt-history view, runtime DAG, or authentication.
-The UI port binds to loopback.
-
-### Run Intelligence
-
-Run detail keeps deterministic execution state first, followed by three panels:
-Execution Summary, Failure Analysis and Similar Incidents. Each snapshot separates
-**facts = Conductor** from **interpretation = local Ollama**. Model confidence is
-an assessment, not a calibrated probability. Incident similarity is a retrieval
-score, not a probability; cards link to actual historical runs.
-
-Summary and failure panels first GET stored snapshots. Only an explicit Generate
-summary / Analyze failure action invokes POST; opening a page never generates
-content. Summaries support settled COMPLETE/FAILED runs; failure generation is for
-settled FAILED runs. The API remains authoritative for attempt-settlement checks.
-Requests are disabled while pending and successful results update only their
-snapshot cache. Intelligence is never polled or included in execution SSE.
-
-Find similar incidents explicitly calls the existing stored-vector GET, without
-Ollama inference or new embeddings. It requires a stored, fully indexed analysis.
-If indexing is absent, the UI explains the existing API prerequisite; it does not
-add an indexing or synthesis action. Empty matches are distinct from retrieval
-errors. Stored summaries, analyses and indexed retrieval remain accessible during
-Ollama outages without an AI-health check. New generation then shows a safe local
-AI unavailable message.
-
-Only these POST paths are allowed through nginx, with UUID-scoped routes:
-`/api/v1/ai/runs/{jobId}/summary` and
-`/api/v1/ai/runs/{jobId}/analyze-failure`. They compute/store intelligence; they
-never execute workflows. Job/workflow creation, proposal approval, indexing,
-synthesis, DELETE, PUT and PATCH remain blocked by the UI proxy. The Vite dev
-proxy is a development convenience, not this production method restriction.
-No task outputs, configuration, prompts, vector values or raw error messages are
-rendered.
-
-### Ask Conductor
-
-Run detail includes a single-turn, read-only operator query panel. A question
-(1–2000 trimmed characters) is scoped to that run; supported suggestions inspect
-retries, failed tasks, timing and historical incidents. Questions never retry,
-cancel, schedule or execute anything. There is no chat history, local storage,
-streaming or new conversation memory.
-
-Answers distinguish `OLLAMA_INTERPRETATION` (local Ollama interpretation) from
-`DETERMINISTIC_NOTICE` (for example, the expected read-only refusal). Tools used,
-cited evidence IDs and expandable evidence remain inspectable. Known safe
-metadata is projected from bounded tool JSON; raw errors, outputs, configuration
-and incident-document blobs are omitted. Only actual run/workflow references get
-links to existing UI routes. No HTML or model-generated commands are executed.
-
-<details>
-<summary>Live Copilot and cited evidence (November 1, 2026)</summary>
-
-![Run-scoped Copilot answer with inspectable retry evidence](docs/screenshots/copilot.png)
-
-This real model response reports two retries but adds an unsupported legacy-history
-caveat despite complete retry evidence. Interpretation can be wrong; the cited
-Conductor facts remain separately inspectable.
-
-</details>
-
-### Workflow Optimization
-
-Workflow detail reads its latest stored advisory report first. Only an explicit
-Generate optimization report action POSTs when no report exists. Java analyzers
-calculate candidates and numeric evidence; Ollama interprets that evidence.
-History bounds, eligible/excluded samples, timing limitations, candidate IDs and
-snapshot metadata stay visible and separate from interpretation. Rates describe
-observed executions, not probabilities; active attempt time is not wall-clock or
-critical-path contribution. Structural observations do not prove business
-independence.
-
-Optimization is **advisory only**: no Apply, Accept, Rewrite or execution control.
-Insufficient-history and no-candidate reports are valid deterministic results and
-need no Ollama call. Stored reports remain readable during outages. New reports
-with candidates and normal Copilot answers need the existing local model;
-deterministic Copilot refusals work without it. Reports are immutable; there is
-no forced-regeneration UI or polling.
-
-<details>
-<summary>Stored workflow optimization report (November 1, 2026)</summary>
-
-![Six deterministic optimization candidates and separate local Ollama interpretation](docs/screenshots/workflow-optimization.png)
-
-Captured from the running Control Plane, including bounded history, numeric
-candidate evidence and advisory interpretation. Stored reads also work offline.
-
-</details>
-
-The only additional nginx POST exceptions are `/api/v1/ai/copilot/query` and
-`/api/v1/ai/workflows/{workflowId}/optimization`. Copilot's dedicated proxy timeout
-is 210 seconds, covering its default 180-second backend deadline; optimization
-uses the existing 180-second intelligence timeout. Workflow/run mutations,
-proposal approval, incident indexing/synthesis and DELETE/PUT/PATCH stay blocked.
-The proxy is not authentication; development Vite proxying is not this production
-method boundary. No prompts, tools, analyzers, fingerprints or model settings
-change in this UI layer.
-
-### Live execution updates
-
-**REST is the source of truth; SSE is live invalidation, not a second execution
-state store.** Events contain only IDs, committed statuses, timestamps and retry
-counters. They never contain task output, configuration, names, raw errors or AI
-responses. The event endpoint verifies job existence (404 if missing); an already
-terminal job receives a terminal hint and the connection closes.
-
-The API, scheduler and workers are separate Compose processes. Java callbacks
-cannot reach the API's in-memory clients directly, and the existing Kafka result
-contract does not cover starts/retries/job completion. Rather than create another
-distributed message path, the API observes committed metadata for subscribed runs
-once per second in one bounded query shared by their subscribers. No subscriptions
-means no observation queries. This moves change detection server-side; it does
-**not** remove database observation or introduce a durable event log. A fresh
-read-only transaction sees only committed data, so a subsequent REST refetch can
-read the observed commit. Execution transactions and Kafka contracts are unchanged.
-
-Supported named hints: `JOB_STARTED`, `JOB_CANCELLING`, `JOB_COMPLETED`,
-`JOB_FAILED`, `JOB_CANCELLED`, `TASK_STARTED`, `TASK_COMPLETED`,
-`TASK_RETRY_SCHEDULED`, `TASK_FAILED`, `TASK_DEAD_LETTERED`, `TASK_CANCELLED`.
-Only observed transitions are emitted. In particular, workers currently set
-RUNNING and final task state in one transaction: ordinary executions do not expose
-a committed TASK_STARTED transition. Retry hints use persisted retry scheduling
-evidence, not guessed delays. Short-lived states may be missed between observations.
-
-The process-local registry defaults to 100 clients, 50 runs, 100 tasks per run,
-15-second comment heartbeats and five-minute connections. Settings live under
-`conductor.run-stream` (`max-connections`, `max-runs`, `max-tasks-per-run`,
-`observation-interval-millis`, `heartbeat-millis`, `timeout-millis`) and are validated
-at startup. Slow/disconnected clients are removed; capacity limits return 503.
-nginx disables buffering/cache and uses a dedicated timeout only for SSE requests.
-
-Registry state and event IDs are process-local. There is no durable replay, event
-history or cross-replica publisher. Each API replica would independently observe
-the shared database, multiplying observation work; this is not a shared fan-out
-design. Reconnection always recovers through REST and ignores replay cursors.
-No WebSockets, AI streaming, new topics, migrations, Redis pub/sub or authentication
-are introduced. Execution SSE remains separate from completed AI responses.
-
-## AI Workflow Generation
-
-Natural language becomes a structured proposal. Conductor validates its DAG,
-stores a preview, and creates a normal workflow only after explicit approval.
-**The LLM never controls scheduling or task execution.**
-
-```mermaid
-flowchart LR
-    User[User prompt] --> AI[loom-ai / Ollama]
-    AI --> Proposal[Structured proposal]
-    Proposal --> Validator[loom-api / existing DAGValidator]
-    Validator --> Preview[Stored preview]
-    Preview --> Approval[Explicit user approval]
-    Approval --> Revalidate[Revalidate]
-    Revalidate --> Workflow[Existing WorkflowService / template]
-    Workflow --> Execute[Separate normal execution request]
-```
-
-AI uses only local Ollama models, with no cloud API key. The optional `ai` Compose
-profile starts `loom-ai` and Ollama; normal orchestration runs without them.
-Spring AI 2.0.1 is scoped to `loom-ai` and is [compatible with Boot 4.1](https://docs.spring.io/spring-ai/reference/getting-started.html).
-The provider sends a native JSON schema to Ollama and strictly validates output
-types and bounds. `loom-ai` has no database credentials or Kafka execution
-producer. Its separate process isolates model dependencies and timeouts from
-orchestration; the tradeoff is one extra local service.
-
-`loom-api` owns proposal persistence and Flyway migrations. Persisting the preview
-ensures approval uses exactly the stored content. Approval locks the proposal,
-revalidates it, and calls the existing `WorkflowService` in one transaction.
-Proposals expire after 24 hours; duplicate approval returns 409. Approval never
-starts execution. Original user prompts are not stored with proposals.
-
-### Ollama setup
-
-AI is disabled by default. The optional profile starts a local Ollama container
-with a persistent model volume and no published model port. Enable AI and install
-the model explicitly; starting Compose does not download model weights:
 
 ```powershell
-$env:AI_ENABLED = 'true'
-$env:AI_MODEL = 'qwen2.5-coder:7b'
+$env:AI_ENABLED='true'
 .\scripts\compose.ps1 --profile ai up --build -d
 .\scripts\compose.ps1 --profile ai exec ollama ollama pull qwen2.5-coder:7b
-.\scripts\compose.ps1 --profile ai exec ollama ollama list
-```
-
-See [.env.example](.env.example) for Compose settings. `OLLAMA_BASE_URL` defaults
-to `http://ollama:11434` in Compose and `http://localhost:11434` for a directly
-launched Java service. Windows host Ollama normally listens only on loopback;
-Podman may be unable to reach it through `host.containers.internal`, so the
-container profile is the default. `AI_REQUEST_TIMEOUT` defaults to 120 seconds;
-`AI_SERVICE_TIMEOUT` defaults to 130 seconds for the API. Temperature and output
-token limits are configurable with `AI_TEMPERATURE` and `AI_MAX_TOKENS`.
-
-### Preview, approval, and execution
-
-```powershell
-$body = @{ prompt = 'Create a workflow that downloads customer orders, validates them, generates invoices in parallel, uploads them and sends a notification.' } | ConvertTo-Json
-$proposal = Invoke-RestMethod -Method Post -Uri 'http://localhost:8080/api/v1/ai/workflows/generate' -ContentType 'application/json' -Body $body -TimeoutSec 150
-$proposal | ConvertTo-Json -Depth 20
-```
-
-Inspect the tasks and validation result. Retrieve the same preview with
-`GET /api/v1/ai/workflows/proposals/{proposalId}`. Invalid graphs remain visible
-with `validation.valid = false` and deterministic errors; they cannot be approved.
-After reviewing a valid preview:
-
-```powershell
-$workflow = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/ai/workflows/proposals/$($proposal.proposalId)/approve"
-Invoke-RestMethod -Uri "http://localhost:8080/api/v1/workflows/$($workflow.id)"
-# Execution is a separate normal API request.
-$job = Invoke-RestMethod -Method Post -Uri "http://localhost:8080/api/v1/workflows/$($workflow.id)/jobs" -ContentType 'application/json' -Body '{"name":"ai-workflow-demo"}'
-Invoke-RestMethod -Uri "http://localhost:8080/api/v1/jobs/$($job.id)"
-```
-
-Invalid user requests return 400, malformed model output returns 422, and provider
-unavailability/timeouts return 503. Normal workflow APIs continue operating during
-AI outages. Model calls have bounded context/output and no automatic retries;
-logs omit full prompts and raw provider errors.
-
-The optional smoke script previews by default and can reuse an inspected proposal
-without another model call:
-
-```powershell
-.\scripts\ai-workflow-smoke.ps1
-.\scripts\ai-workflow-smoke.ps1 -ProposalId '<id from preview>' -Approve -Execute
-```
-
-Generated workflows use only the supported capability catalog. A business task
-name does not create an integration: HTTP needs an explicit URL. Transform input
-may be static JSON or the captured JSON output of one declared direct dependency.
-Parallelism is a fixed DAG, without schedules or dynamic fan-out. Human review remains
-necessary: a valid graph does not guarantee the requested business semantics.
-Authentication/tenant isolation and expired-proposal cleanup are deferred.
-Workflow optimization is advisory and read-only. Frontend AI and automatic optimization application are not implemented.
-
-Verified on 2026-10-04: 54 unit tests and 18 Podman integration tests passed. The
-real `qwen2.5-coder:7b` model generated the six-task orders DAG with two invoice
-branches and a join; all tasks completed after explicit approval and execution.
-No workflow template existed before approval. Duplicate approval returned 409;
-with Ollama stopped, generation returned 503 while a manual workflow completed.
-The successful CPU-only model call took about 78 seconds; local latency varies.
-
-## AI Failure Analysis
-
-Failure analysis keeps execution facts separate from model interpretation. All AI
-runs locally through Ollama; no cloud APIs or API keys are used.
-
-```mermaid
-flowchart LR
-    W[Worker failure] --> E[Persisted attempt and DLQ evidence]
-    E --> C[loom-api: bounded sanitized context]
-    C --> A[loom-ai: Ollama structured interpretation]
-    A --> P[loom-api: immutable analysis snapshot]
-    P --> R[API: facts and interpretation separately]
-```
-
-`POST /api/v1/ai/runs/{jobId}/analyze-failure` analyzes a failed, settled run.
-`GET /api/v1/ai/runs/{jobId}/failure-analysis` retrieves the stored analysis without
-calling Ollama. Repeating POST for an unchanged context reuses the persisted result.
-Facts include recorded attempts, errors, timestamps, planned retry times, and DLQ
-status. `interpretation` contains a likely cause, confidence, explanation, and
-recommended actions. Confidence is a model assessment, not a calibrated probability.
-
-`AI_FAILURE_CONTEXT_MAX_CHARS` sets the serialized failure-context JSON character
-budget in both the API and AI service (default 32,768; allowed 1–65,536). It is a
-character limit, not a model-token limit. Compose passes the same value to both
-services; when starting them separately, configure the same value in each.
-
-For interactive requests in VS Code, open [scripts/conductor-demo.http](scripts/conductor-demo.http)
-with the REST Client extension (`humao.rest-client`) and click **Send Request**.
-The collection includes existing-demo reads and fresh workflow/failure flows with
-captured response IDs. Send each section in order and wait for the indicated terminal
-run state before analysis; approval and execution remain separate requests.
-
-The API retains database ownership; loom-ai receives bounded facts and has no
-orchestration database credentials. V4 adds nullable execution evidence for backwards
-compatibility; V5 stores analyses with a unique run/context fingerprint. Legacy
-records may lack errors or attempt numbers. Console logs, workflow-template linkage,
-external service health, and historical Kafka payloads are not fabricated as facts.
-Unavailable evidence is explicit; a run without usable failure evidence is rejected.
-
-For the controlled local demo, explicitly set `DEMO_FAILURES_ENABLED=true` when
-starting both workers. Only `demoConnectionTimeout`, `demoDownstreamTimeout`, and
-`demoInvalidJson` trigger fixed simulated errors; the default is disabled. Run:
-
-```powershell
-python scripts/failure-analysis-smoke.py
-```
-
-The smoke script creates a job, checks three failed attempts and terminal DLQ
-evidence, requests analysis, and verifies cached reuse. Normal execution remains
-separate from analysis. Retry scheduling and execution-critical Kafka publication use
-the PostgreSQL transactional outbox described below. DLQ replay starts a new durable
-execution generation; AI analysis does not perform replay.
-
-## Incident Memory
-
-Historical retrieval uses actual persisted failures. Facts originate from Conductor;
-Ollama supplies advisory interpretation. All chat and embedding inference stays local,
-with no cloud APIs or API keys.
-
-```mermaid
-flowchart LR
-    A[Persisted failure analysis] --> D[Canonical sanitized incident per failed task]
-    D --> E[Local Ollama embedding]
-    E --> V[PostgreSQL / pgvector]
-    Q[Current stored incident vector] --> V
-    V --> M[Top historical matches with real run and task IDs]
-    M --> S[Optional Ollama synthesis with validated citations]
-```
-
-The chat model remains `qwen2.5-coder:7b`. Embeddings use
-`nomic-embed-text:v1.5` (274 MB), whose **768 dimensions were verified locally**.
-It is substantially smaller than the chat model and suitable for short incident
-documents on a local development machine. Chat and embedding models are independently
-configured. V6 enables pgvector and stores vectors linked to immutable analysis/task
-IDs, with a cosine HNSW index and a uniqueness constraint preventing duplicate storage.
-Flyway owns schema changes; the AI service has no database credentials or SQL access.
-Changing vector dimensions requires a migration and reindexing. Different embedding
-model names are never compared; replacing model weights under the same tag requires
-deliberate reindexing.
-
-The API uses a small adapter with parameterized pgvector queries instead of a
-separate vector-store service or Spring AI's automatic schema setup. This preserves
-relational ownership and existing Flyway migrations; the accepted tradeoff is an
-explicit 768-dimensional schema and a few application-owned SQL queries. No SQL is
-generated by the model. HNSW retrieval is approximate and does not prove that every
-related incident has been found.
-
-Explicitly install the embedding model; normal startup never downloads models:
-
-```powershell
 .\scripts\compose.ps1 --profile ai exec ollama ollama pull nomic-embed-text:v1.5
 ```
 
-Set `AI_EMBEDDING_MODEL=nomic-embed-text:v1.5` and
-`AI_INCIDENT_MIN_SIMILARITY=0.93` in your local environment. API and AI containers
-receive the same embedding-model setting. The 0.93 default was calibrated using the
-controlled timeout and invalid-JSON examples, not a general-purpose accuracy benchmark.
-Similarity is a cosine score, not a probability. We deliberately filter weak matches;
-the threshold may need tuning for real task handlers.
+No model downloads occur in normal CI. CPU inference can take a minute or more;
+see [.env.example](.env.example) for bounded timeout settings. If recreating only
+`loom-api`, restart `conductor-ui` so nginx resolves the new container address.
 
-| Endpoint | Behavior |
-| --- | --- |
-| `GET /api/v1/ai/failure-analyses/{analysisId}` | Exact stored analysis and factual snapshot |
-| `POST /api/v1/ai/failure-analyses/{analysisId}/index` | Idempotent explicit indexing/retry |
-| `GET /api/v1/ai/runs/{jobId}/similar-incidents?topK=3` | Inspectable historical evidence; no model call |
-| `POST /api/v1/ai/runs/{jobId}/similar-incidents/synthesize?topK=3` | Optional evidence-backed interpretation |
+## Reproduce the demo
 
-With `AI_ENABLED=true`, analysis persistence queues indexing on a bounded background executor. Embedding
-outages never invalidate the saved analysis or block execution. Failed/dropped indexing
-can be retried explicitly. Indexing supports up to five failed tasks per analysis;
-documents are capped at 4,000 characters and exclude raw logs, secrets, and model-authored
-execution claims. Search requires a fully indexed current analysis, excludes its entire
-run, limits top-K to five, and returns references to real stored incidents. With no
-matches, the response is deterministic and does not call the chat model. Previously
-indexed incidents remain searchable during an Ollama outage.
+Use [scripts/conductor-demo.http](scripts/conductor-demo.http) with VS Code REST Client.
+Run each section in order: named responses capture fresh IDs. The convenience
+`verified*` IDs are machine-specific historical examples, not portable fixtures.
 
-Validated synthesis responses use a bounded, process-local 100-entry cache keyed by
-the model settings and retrieved evidence. Restarting the API clears that cache;
-failure analyses and embeddings remain persisted in PostgreSQL.
+For the real HTTP -> JSON_SELECT -> HTTP POST pipeline, retries and DLQ:
 
-Run the controlled three-incident demo after enabling `DEMO_FAILURES_ENABLED=true`
-for both workers and explicitly pulling both Ollama models:
+```bash
+TASK_HTTP_ALLOW_PRIVATE_ADDRESSES=true docker compose --profile demo up --build -d
+docker compose --profile demo restart task-demo
+python scripts/task-dataflow-smoke.py
+```
 
 ```powershell
-python scripts/incident-memory-smoke.py --synthesize
-```
-
-The script verifies analysis reuse, duplicate indexing prevention, a related timeout
-match, exclusion of the unrelated JSON failure, and citations to actual incidents.
-
-The existing PostgreSQL 15 volume is retained when switching to the pinned pgvector
-image. Back up an existing database before the image change. If PostgreSQL reports an
-OS collation mismatch, rebuild affected indexes before refreshing its recorded version;
-see [PostgreSQL's guidance](https://www.postgresql.org/docs/15/sql-altercollation.html).
-Fresh volumes need no such repair.
-
-## Ask Conductor
-
-Conductor Copilot is a local, read-only operations assistant. It uses `qwen2.5-coder:7b` through Ollama and returns an answer separately from inspectable evidence and code-owned run/task/analysis/incident references. `answerSource` explicitly distinguishes `OLLAMA_INTERPRETATION` from `DETERMINISTIC_NOTICE`. Model prose is interpretation: inspect code-derived facts and any prior analysis confidence in the evidence rather than treating a likely cause as proven.
-
-```mermaid
-flowchart LR
-    Question --> Ollama[Ollama structured tool selection]
-    Ollama --> Registry[Allowlisted read tool]
-    Registry --> Evidence[Conductor evidence]
-    Evidence --> Answer[Ollama answer with citations]
-```
-
-`POST /api/v1/ai/copilot/query` accepts `question` and exactly one of `jobId`, `workflowId`, or `analysisId`. Example: `{"question":"How many retries happened?","jobId":"<run UUID>"}`. Other questions include “Why did this run fail?”, “Which tasks failed?”, and “Have we seen this before?”. Run scope offers `getRun`, `getTasks`, `getFailedTasks`, `getTaskAttempts`, `getFailureAnalysis`, and `getSimilarIncidents`; workflow scope offers `getWorkflow`. Stored analyses and indexed incidents are read only: the copilot never generates failure analysis or indexes an incident implicitly.
-
-There are no mutation tools, scheduler access, arbitrary SQL, Kafka publishing, shell execution, or worker calls. Task IDs must belong to the scoped run; historical matches carry explicit references to previous runs. Limits are four tool calls, five model steps, 50 tasks, 300 recorded attempts, five incident matches, 4 KB per tool result, 24 KB total context, and a configurable `AI_COPILOT_TIMEOUT` (default 180 seconds; maximum five minutes). Missing or oversized evidence is reported rather than fabricated. Recorded retry counts and task durations include completeness indicators; task-duration shares are fractions of recorded active attempt time, not workflow wall time.
-
-Run `python scripts/copilot-smoke.py --job-id <analyzed-and-indexed-failed-run>` for the optional live check. The VS Code collection in `scripts/conductor-demo.http` includes query examples. Cold CPU model loading may exceed the provider timeout; such requests return 503 safely.
-
-## Execution Summaries
-
-Terminal `COMPLETE` and settled `FAILED` runs can be summarized on explicit request. Java calculates task-state counts, recorded attempts/retries, observed attempt span, and the five largest contributors to aggregate recorded active task time. Ollama supplies a separate `interpretation` containing an overview, notable events, and observational notes; it never authors the numeric `facts`.
-
-```mermaid
-flowchart LR
-    Run[Terminal run] --> Facts[Deterministic sanitized facts]
-    Facts --> Ollama[Local Ollama interpretation]
-    Ollama --> Stored[Persisted summary snapshot]
-    Facts --> Stored
-```
-
-| Endpoint | Behavior |
-| --- | --- |
-| `POST /api/v1/ai/runs/{jobId}/summary` | Generate if the same evidence has no stored summary; otherwise reuse it |
-| `GET /api/v1/ai/runs/{jobId}/summary` | Read the latest stored snapshot, without contacting Ollama |
-
-V7 adds `ai_run_summaries`, unique by run ID and versioned context hash. The hash includes the sanitized execution-evidence fingerprint and optional stored failure-analysis reference. Scheduler updates to `updatedAt` do not cause new model calls. Changed execution evidence can produce a new immutable snapshot. Concurrent requests coalesce within the API process, and the database uniqueness constraint prevents duplicate rows across processes. There is no automatic background generation or failure-analysis regeneration.
-
-`observedAttemptSpanMillis` spans recorded attempt start/end timestamps; it is not an exact engine run duration. Active-duration shares include valid recorded retry attempts and do not represent a critical path or wall-time percentage. Missing or legacy history is explicitly marked incomplete. Runs with active tasks or outstanding retries are rejected even if their job status has already become `FAILED`.
-
-```powershell
-python scripts/execution-summary-smoke.py --complete-job-id <complete-run> --failed-job-id <analyzed-failed-run> --expected-retries 2
-```
-
-The VS Code request collection includes POST/GET examples. Stored summaries, stored failure analyses, and already-indexed vector retrieval remain available when Ollama is stopped; new copilot answers and uncached summaries require the local model. Prometheus exposes `ai_copilot_*`, `ai_tool_*`, and `ai_summary_*` metrics without entity-ID tags, alongside existing HTTP request metrics in Grafana.
-
-For slower CPU-only machines, the measured cold model load can exceed the default provider deadline. These optional bounded overrides were used for local verification; no model is downloaded by this command:
-
-```powershell
-$env:AI_ENABLED='true'
-$env:AI_REQUEST_TIMEOUT='180s'
-$env:AI_SERVICE_TIMEOUT='190s'
-$env:AI_COPILOT_TIMEOUT='240s'
-.\scripts\compose.ps1 --profile ai up -d
-```
-
-## Workflow Optimization Intelligence
-
-Workflow structure and bounded linked execution history feed deterministic Java analyzers. Java generates candidate IDs and all numeric evidence. Local Ollama (`qwen2.5-coder:7b`) adds a separately validated interpretation.
-
-```mermaid
-flowchart LR
-    History[Workflow and linked history] --> Java[Java analyzers]
-    Java --> Candidates[Optimization candidates]
-    Candidates --> Ollama[Local Ollama explanation]
-    Candidates --> Stored[Immutable advisory report]
-    Ollama --> Stored
-```
-
-**Optimization recommendations are advisory. Conductor does not automatically rewrite or execute workflows based on AI recommendations.** There is no apply endpoint, execution access or generalized dataflow. Spring discovers analyzers through IoC; duplicate types fail startup, and the immutable registry assigns snapshot-local candidate IDs.
-
-| Candidate | Evidence threshold |
-| --- | --- |
-| `SLOW_TASK` | More than 50% of aggregate eligible recorded active attempt duration; at least two task definitions each meet the minimum eligible sample count |
-| `HIGH_RETRY_RATE` | At least two executions retried, comprising at least 30% of eligible executions |
-| `FAILURE_HOTSPOT` | At least two executions contain failed attempts, comprising at least 30% of eligible executions; recovery and terminal failure counts remain separate |
-| `DLQ_HOTSPOT` | At least two executions end dead-lettered, comprising at least 30% of eligible executions |
-| `DURATION_IMBALANCE` | Siblings with identical nonempty prerequisites have at least a 3:1 aggregate active-duration ratio across paired eligible executions; zero denominators are excluded |
-| `PARALLEL_EXECUTION_OBSERVATION` | Informational `STRUCTURAL_OBSERVATION`: siblings already share prerequisites without dependency reachability; this is not a proposed scheduling change |
-
-Retry frequency is `executions with recorded retries / eligible executions * 100`; failure frequency counts executions containing a failed attempt, and DLQ frequency counts terminal dead-lettered executions. Rate calculations require unique contiguous terminal attempt numbers starting at zero. Timing additionally requires valid start/end timestamps on every attempt. Excluded execution counts remain inspectable. Uncomputed metrics are null rather than zero; sorted run IDs retain the snapshot provenance. Recorded retries count numbered attempts greater than zero, not configured retry limits.
-
-Recorded active duration sums attempt end minus start, including retries and worker dispatch bookkeeping. It includes HTTP waiting and intentional DELAY steps; it is not CPU time. Average active attempt duration divides that sum by attempt count. Duration share uses all complete-timing executions in the denominator, including task definitions below the minimum sample size; candidate eligibility separately requires sufficient samples. For example, a task with one unusually long valid execution contributes to aggregate recorded time but cannot itself qualify as a slow-task recommendation. This is an observed aggregate share, not workflow wall time or critical-path contribution. Sibling comparisons pair the same runs. Structural siblings are already eligible for concurrent DAG scheduling; graph structure does not establish business independence, safe dependency removal or a proven speedup. Every structural observation retains that limitation.
-
-V9 adds nullable `jobs.workflow_template_id` and persisted `tasks.logical_id`. Future jobs explicitly launched from a template retain both identities before publication. Historical jobs remain unlinked; names/configuration are never used to guess identity. Direct manual jobs remain compatible and unlinked. Optimization accepts bounded safe logical identifiers; workflows with other identifiers remain executable.
-
-Context collection performs bounded bulk reads in a repeatable-read transaction. It selects linked `COMPLETE` or settled `FAILED` jobs in the history window, excludes drifted definitions and unsettled runs, and rejects attempt overflow. Failed runs may contain blocked pending tasks without attempts; running work and scheduled retries are excluded. Missing/legacy attempt numbers and invalid timestamps exclude affected executions from the relevant arithmetic. Truncation and exclusions are explicit. Model context omits URLs, bodies, task configuration and raw error messages.
-
-| API property | Default | Bound |
-| --- | --- | --- |
-| `conductor.optimization.max-runs` | `50` | `1..50` |
-| `conductor.optimization.min-sample-size` | `5` | `2..max-runs` |
-| `conductor.optimization.max-candidates` | `20` | `1..20` |
-| `conductor.optimization.history-window` | `30d` | positive, at most `365d` |
-| `conductor.optimization.max-attempts` | `1000` | `1..1000` |
-
-Compose maps these to `OPTIMIZATION_MAX_RUNS`, `OPTIMIZATION_MIN_SAMPLE_SIZE`,
-`OPTIMIZATION_MAX_CANDIDATES`, `OPTIMIZATION_HISTORY_WINDOW` and
-`OPTIMIZATION_MAX_ATTEMPTS`; see `.env.example`.
-
-V10 adds `ai_workflow_optimizations`, unique by workflow/context hash. Evidence fingerprint v2 canonicalizes task/run identities and dependency sets explicitly; attempts are ordered numerically by attempt number, with deterministic evidence tie-breakers. It excludes update timestamps and request-time noise. Report policy v4 uses the clarified informational observation names and UTF-8 byte limits: a new POST produces a new-policy snapshot rather than modifying an old row. Stored prior reports remain readable, including legacy structural enum names. Same-context requests reuse immutable reports; changed evidence can produce another snapshot. Requests coalesce within one API process. Database uniqueness prevents duplicate rows across instances, although two instances may both invoke Ollama before one wins persistence. Model latency holds no database transaction or execution lock.
-
-Optimization code separates `api`, `application`, `domain`, `analyzer`, `support`, `client`, `persistence` and typed `config` responsibilities; dedicated AI-output validators remain in the existing validation package. The application service exposes collection, cache/coalescing, interpretation and persistence flow. History loading and run eligibility matching remain inside the context collector's transaction; pure analyzers receive bounded domain evidence. Support components own metrics, graph relationships, candidate construction and fingerprinting. Report storage owns serialization and immutable insert-race handling.
-
-Insufficient-history and no-candidate results are persisted with model `deterministic` without invoking Ollama. Model interpretation must cite existing candidate IDs and pass bounded text/identifier validation before persistence. It cannot change facts. GET only reads storage, and same-context POST reuse works when Ollama is unavailable.
-
-| Endpoint | Behavior |
-| --- | --- |
-| `POST /api/v1/ai/workflows/{workflowId}/optimization` | Collect, analyze, generate or reuse an advisory report |
-| `GET /api/v1/ai/workflows/{workflowId}/optimization` | Retrieve the latest stored report without a model call |
-
-Use the optimization section in `scripts/conductor-demo.http`: a fresh template demonstrates insufficient history; multiple settled template executions provide evidence. Prometheus exports `ai_optimization_requests_total`, `ai_optimization_failures_total` and `ai_optimization_duration_seconds`. The existing Conductor Requests Grafana dashboard includes request, failure and p95 duration panels without entity-ID or task-name tags.
-
-The optional demo fixture can change notification behavior without changing a workflow:
-
-```powershell
-$env:TASK_DEMO_NOTIFICATION_STATUS='500' # /orders stays healthy; /notify returns HTTP 500
-.\scripts\compose.ps1 --profile demo up -d --no-deps --force-recreate task-demo
-# Run the same template several times and wait for settled retry/DLQ evidence.
-$env:TASK_DEMO_NOTIFICATION_STATUS='200'
-.\scripts\compose.ps1 --profile demo up -d --no-deps --force-recreate task-demo
-# Run that same template again to collect successful executions.
-```
-
-The live six-run snapshot contained three successful and three DLQ runs. Notification
-retry/failure/DLQ rates were 50%, with six recorded retries and nine failed attempts.
-The intentional delay contributed 7,206 ms (95.08%) of eligible recorded active attempt
-time; the paired sibling ratio was 110.86:1. These are observations from that snapshot,
-not workflow latency or performance promises. Repeated POST/GET reused the report.
-With Ollama stopped, cached reports, existing analysis/search/summary reads and manual
-real workflows remained available; changed-history interpretation returned 503.
-Insufficient-history and no-candidate paths also completed without Ollama.
-
-Interpretation policy is versioned separately from the canonical evidence fingerprint.
-Known contradictory advice, such as enabling existing parallel scheduling or implementing
-existing retry behavior, and selected unsupported speedup promises fail validation with
-422 and create no new snapshot. These conservative text checks are not semantic proof:
-they can reject legitimate phrasing and cannot detect every inaccurate recommendation.
-Human review remains required; the deterministic candidate evidence is authoritative.
-
-## Platform conventions
-
-Exceptions belong to the module that owns the failure: `loom-api.exception` maps public errors to Spring `ProblemDetail`, while `com.loom.ai.exception` preserves the internal AI service's `{code, message}` contract. Invalid input is 400, missing data 404, conflicting state 409, invalid model output 422, and unavailable AI 503. Malformed requests do not echo payloads or parser diagnostics.
-
-Validation has three boundaries:
-
-- Jakarta Bean Validation checks request shape and bounds. Copilot's `@ExactlyOneScope` requires one run, workflow or analysis scope.
-- Explicit domain services enforce DAG rules, task ownership and terminal/settled execution state.
-- Dedicated output validators check untrusted model interpretations, including evidence citations, identifier grounding and size limits. They cannot replace domain validation.
-
-```mermaid
-flowchart LR
-    Request --> Schema[Request constraints]
-    Schema --> Domain[Deterministic domain checks]
-    Domain --> Model[Local Ollama]
-    Model --> Output[Untrusted output validator]
-    Output --> Response[Evidence and interpretation]
-```
-
-`loom-observability` provides an explicit `OperationMetrics` scope shared by API and AI services. It records requests, failures, duration and structured correlation logs; services still own exception propagation and business logic. Operations and outcomes are enums, so arbitrary prompts, IDs and URLs cannot become metric tags. Model identity is bounded log metadata only. Existing Prometheus metric families and the **Conductor Requests** Grafana dashboard remain compatible. This wrapper uses direct Micrometer instrumentation rather than AOP, so it works on ordinary calls without proxy restrictions. The module has no persistence dependencies, keeping JPA out of `loom-ai`.
-
-Typed configuration records group AI transport, failure-context limits, copilot deadlines and incident settings. Configuration is constructor-injected and validated during binding; existing environment variables and defaults are preserved. Provider timeout (120 seconds), API transport timeout (130 seconds) and copilot deadline (180 seconds) are distinct budgets. `AI_FAILURE_CONTEXT_MAX_CHARS` supplies the same default 32,768-character limit to API and AI. Invalid deadlines, context limits or similarity thresholds prevent startup rather than failing on a later request.
-
-Task capabilities extend these conventions with typed configuration, dedicated validators and bounded handler instrumentation.
-
-## Durable Event Publication
-
-PostgreSQL owns execution state **and** immutable outbound event intent. API job
-submission, worker completion/DLQ/retry and reactive scheduler dispatch insert
-`outbox_events` in the same transaction as their state changes. The API-owned
-relay publishes the stored JSON to the existing `job-created`, `task-queue` and
-`task-results` topics; no Kafka network operation runs in the state transaction.
-
-```mermaid
-flowchart LR
-    State[State mutation] --> Tx[One PostgreSQL transaction]
-    Intent[Exact event intent] --> Tx
-    Tx --> Outbox[Durable outbox]
-    Outbox --> Claim[Short lease claim / SKIP LOCKED]
-    Claim --> Relay[API relay outside DB transaction]
-    Relay --> Kafka[Kafka acknowledgment]
-    Kafka --> Mark[Mark published]
-```
-
-Retries retain the existing 1, 2, 4... second backoff. A failed attempt's
-`retryScheduledAt` equals its new queue intent's initial `available_at`; the relay
-uses database time to select due rows. Worker restarts cannot erase these rows.
-Kafka failures retain intent and defer relay attempts by 1, 2, 4... up to 30 seconds.
-A crashed relay's lease expires automatically. A cancelled job's delayed event may
-still be delivered, but the worker's job/task-state guards skip it.
-
-The relay claims **one row at a time**, up to a bounded batch per poll, so later
-rows do not wait behind Kafka sends with expiring leases. Per-claim tokens fence
-stale acknowledgments. Claims and marks use short database transactions; sends
-wait for Kafka acknowledgment outside those transactions. Scheduler listeners wait
-for their R2DBC transaction before Kafka acknowledgment and retry failures rather
-than acknowledging an unfinished asynchronous subscription.
-
-`conductor.outbox.*` startup-validated defaults:
-
-| Setting | Default | Bound |
-|---|---|---|
-| `enabled` | `true` | Disable only for controlled testing/maintenance; pending intent stays durable |
-| `poll-interval` | `500ms` | 100ms-30s |
-| `batch-size` | `50` | 1-200 |
-| `claim-timeout` | `30s` | 1s-5min; must exceed twice publish timeout |
-| `publish-timeout` | `10s` | 100ms-30s |
-
-V12 adds the outbox and generation-zero defaults on tasks/attempts without
-rewriting historical execution IDs. Upgrade API, scheduler and workers together;
-old Kafka records default to generation zero, but old service binaries are not
-expected to understand new generation-bearing contracts. V12 does not infer
-missing publication intents for pre-outbox historical records. Queue dedupe keys include task, generation
-and attempt. Generation zero preserves legacy deterministic IDs; manual DLQ
-replay increments generation and resets attempts to zero. Current DLQ timestamp
-is cleared on replay, while prior failed attempts remain. Replay resumes only the
-selected task, **not** FAIL_FAST-cancelled descendants. Existing summary eligibility
-rules can reject a replay-completed run that still contains cancelled tasks.
-Current deterministic AI evidence uses the current generation per task and explicitly
-notes excluded prior generations; generation-zero snapshot shapes remain unchanged.
-No outbox payload or captured output is added to AI context or SSE.
-
-**Delivery is at least once, not exactly once.** A Kafka acknowledgment followed
-by a crash before `published_at` can deliver the same event again. Unique intent
-keys, task locks, deterministic attempt IDs and scheduler state/generation checks
-make repeated deliveries safe for recorded execution. Lock contention remains a
-retryable consumer error rather than acknowledging possibly unfinished work.
-An external HTTP side effect followed by a process crash before DB commit may
-still repeat. Exactly-once external effects require downstream cooperation; this
-PR does not add HTTP idempotency keys.
-
-PostgreSQL is the consistency boundary because it already owns authoritative
-execution state. Kafka transactions cannot atomically commit that database state;
-in-memory timers lose intent, and Quartz/Redis queues/CDC would add another
-coordination mechanism or infrastructure unnecessarily. Delayed availability in
-the same outbox solves durable retries without a second scheduler.
-
-Published rows are retained for diagnosis; no retention/cleanup job is included.
-Payloads are limited to 32 KiB and the three execution contracts, never task
-outputs/configuration. Metrics cover pending count, publication requests/success/
-failure and latency, without IDs, payloads or error-text labels. The existing
-SSE PostgreSQL observation path remains unchanged.
-
-## Task capabilities
-
-```mermaid
-flowchart LR
-    Event[Kafka TaskEvent] --> Worker
-    Worker --> Lock[Redisson lock]
-    Lock --> Definition[Load persisted type and config]
-    Definition --> Registry[TaskHandlerRegistry]
-    Registry --> Handler[Typed handler]
-    Handler --> Evidence[Worker persistence and failure evidence]
-    Evidence --> Retry[Worker retry / DLQ]
-    Retry --> Result[Transactional task-results outbox intent]
-```
-
-| Type | Purpose | Important limits |
-|---|---|---|
-| NOOP | Orchestration and compatibility | Existing 50 ms simulation; no external work |
-| DELAY | Wait step | `durationMillis` 0–30,000; configurable lower ceiling |
-| HTTP_REQUEST | GET or POST | Total deadline ≤10 s, request body 16 KiB and response body 64 KiB by default; no redirects |
-| TRANSFORM | JSON_SELECT or JSON_RENAME with static or direct dependency input | JSON object input 16 KiB by default; at most 50 simple top-level field names; no expressions |
-
-**Conductor does not execute arbitrary shell, code, JavaScript, Python or SQL.** No runtime plugin downloads are supported.
-
-`loom-task-capabilities` owns immutable typed configurations, validated `TaskProperties`, the application-owned capability catalog and a validator registry. Spring discovers handlers as beans; duplicate handler or validator registrations fail startup. Workers dispatch by `TaskType`, without a handler switch in the executor. Handlers cannot publish Kafka events, mutate task state, schedule retries or enter DLQ. Worker-owned retry semantics remain unchanged: execution failures retry through the existing exponential backoff policy, then become DEAD_LETTERED.
-
-Manual templates, direct jobs and AI proposals all pass capability checks plus DAG validation. `GET /api/v1/task-capabilities` exposes the catalog. Ollama receives that catalog and a strict four-capability JSON schema; model output is checked again deterministically. Preview, explicit approval through WorkflowService and separate execution remain required.
-
-Example task definitions:
-
-```json
-[
-  {"taskId":"check","name":"Check orders","type":"HTTP_REQUEST","config":{"method":"GET","url":"http://task-demo:8080/orders","timeoutMillis":2000},"dependsOn":[],"maxRetries":2},
-  {"taskId":"wait","name":"Wait briefly","type":"DELAY","config":{"durationMillis":100},"dependsOn":["check"],"maxRetries":0},
-  {"taskId":"select","name":"Select static fields","type":"TRANSFORM","config":{"operation":"JSON_SELECT","input":"{\"id\":42,\"internal\":\"omitted\"}","fields":["id"]},"dependsOn":["wait"],"maxRetries":0}
-]
-```
-
-JSON_RENAME uses `{"operation":"JSON_RENAME","input":"{\"customer_id\":42}","renames":{"customer_id":"customerId"}}`. Missing source fields and existing rename targets fail safely; fields are literal top-level names, not paths or scripts. Successful transform results are bounded JSON outputs owned by their successful execution attempt.
-
-The example above deliberately uses static transform input. For a dependency-backed pipeline, see the Task outputs and Dataflow sections below.
-
-### Task outputs
-
-V11 adds nullable `task_executions.output_text` and `output_content_type`; V1-V10 remain unchanged. Historical executions continue to have no output. Output belongs to a COMPLETE attempt, never mutable task state or a failed attempt. The worker validates UTF-8 bytes and commits output with the successful execution/task state with its transactional completion intent before the relay can release downstream tasks. Kafka events contain no output payload. Compose shares the configured limit across API, AI and workers through `TASK_OUTPUT_MAX_BYTES`.
-
-`conductor.tasks.output.max-bytes` defaults to 65,536 bytes (64 KiB), with the same hard database ceiling. Applications may configure a lower value. Oversized output fails rather than truncating. Only `application/json` and `text/plain` are supported; NOOP and DELAY produce no output. HTTP capture is explicitly opt-in through `captureResponseBody: true`; absent/false preserves bounded consumption and discard. A captured nonempty response must declare a supported UTF-8 content type. An empty captured response without a declared content type is stored as empty `text/plain`; an empty body is never a valid JSON object for TRANSFORM. Response headers, cookies and authorization values are not persisted.
-
-**Captured task outputs are persisted in Conductor's database and therefore must not contain secrets unless a future secret/data-classification system explicitly supports them.** There is no field encryption or secret vault integration. Outputs are not logged, included in metric tags, automatically exposed by normal run responses or sent to Ollama. Failure analysis, incident embeddings, Copilot, summaries and optimization remain output-blind.
-
-### Dataflow
-
-```mermaid
-flowchart LR
-    Fetch[HTTP GET with captureResponseBody true] -->|Bounded JSON output| Select[TRANSFORM JSON_SELECT]
-    Select -->|Bounded JSON output| Notify[HTTP POST bodyTaskId]
-```
-
-```json
-[
-  {"taskId":"fetch","name":"Fetch orders","type":"HTTP_REQUEST","config":{"method":"GET","url":"http://task-demo:8080/orders","timeoutMillis":2000,"captureResponseBody":true},"dependsOn":[],"maxRetries":2},
-  {"taskId":"select","name":"Select notification fields","type":"TRANSFORM","config":{"operation":"JSON_SELECT","inputTaskId":"fetch","fields":["id","email"]},"dependsOn":["fetch"],"maxRetries":0},
-  {"taskId":"notify","name":"Post selected fields","type":"HTTP_REQUEST","config":{"method":"POST","url":"http://task-demo:8080/notify","timeoutMillis":2000,"contentType":"application/json","bodyTaskId":"select"},"dependsOn":["select"],"maxRetries":2}
-]
-```
-
-**Conductor does not implement a general expression or variable language. Initial dataflow passes a bounded whole-task output from a declared direct dependency.** TRANSFORM requires exactly one of static `input` and `inputTaskId`. HTTP POST permits a static `body`, a `bodyTaskId`, or no body; it rejects both sources together. GET cannot consume a body reference. References cannot target ancestors that are not direct dependencies, siblings, other jobs, unknown tasks or the task itself. There is no JSONPath, interpolation, arithmetic, dynamic fan-out or script evaluation.
-
-Workers resolve one declared source from PostgreSQL after locking, require the upstream task and exactly one execution to be COMPLETE, and use only that successful attempt's output. Missing, ambiguous, oversized or incompatible output fails with a safe error without including its content. Persisted config remains declarative and unchanged. TRANSFORM accepts JSON objects only; referenced HTTP POST bodies require JSON output and `contentType: application/json`. The downstream transform input and HTTP request body limits remain independently enforced at 16 KiB by default, even when the stored source is within the 64 KiB output bound. A failed upstream task does not release its dependent task.
-
-AI generation may propose these explicit references using the application-owned catalog. Normal capability, reference and DAG validation still precede preview, human approval and separate execution. Runtime output content is never supplied to workflow generation or other AI features.
-
-### HTTP network boundary
-
-Only HTTP(S), GET and POST are accepted. URLs cannot contain credentials, query strings or fragments; custom headers and authentication are unsupported. Bodies must not contain secrets: secret-management integration is not implemented. Response bodies are persisted only when capture is enabled; response headers and underlying network exception details are never persisted. Controlled failures include HTTP_STATUS_500, HTTP_TIMEOUT, HTTP_CONNECTION_FAILURE and HTTP_RESPONSE_TOO_LARGE.
-
-Literal addresses are validated before persistence. At connection time, the reusable Apache client checks all resolved addresses and supplies those same addresses to its connection operator; there is no separate unguarded resolution. Default policy rejects loopback/private/ULA/shared address space. Metadata addresses (including mapped IPv4 and AWS IPv6), unspecified, link-local, multicast and selected reserved/translation/tunnel ranges remain blocked even with private opt-in. Redirects, automatic HTTP retries, cookies and decompression are disabled. Header count is limited to 64 and each header/status line to 8 KiB. A total task deadline bounds DNS/connect/read/slow-drip responses; an OS DNS lookup may outlive cancellation, with at most eight outstanding lookups per worker client. These application checks complement network egress controls; they cannot prove that every globally routable destination is trustworthy.
-
-Typed settings include `conductor.tasks.delay.max-duration`, `conductor.tasks.http.max-timeout`, `max-request-bytes`, `max-response-bytes`, `allow-private-addresses`, `conductor.tasks.transform.max-input-bytes`, and `conductor.tasks.output.max-bytes`. Startup validation enforces hard ceilings: delay 30 s, HTTP 10 s, request/input/output 64 KiB and consumed response 1 MiB. Captured persisted output must satisfy both the HTTP response limit and the output limit. Total serialized task config is capped at 64 KiB. Task deadlines fit within the existing 60 s Redis lease; database stalls and process crashes remain separate reliability concerns.
-
-### Local capability demo
-
-The fixed HTTP fixture is opt-in; it is a demo server, not an executable task capability:
-
-```powershell
-$env:AI_ENABLED='true'
-$env:TASK_HTTP_ALLOW_PRIVATE_ADDRESSES='true' # Demo only; default false
-.\scripts\compose.ps1 --profile ai --profile demo up -d --build
-python scripts/task-capabilities-smoke.py
-```
-
-For the captured-output pipeline and successful retry evidence, restart the fixed fixture first, then run:
-
-```powershell
+$env:TASK_HTTP_ALLOW_PRIVATE_ADDRESSES='true'
+.\scripts\compose.ps1 --profile demo up --build -d
 .\scripts\compose.ps1 --profile demo restart task-demo
 python scripts/task-dataflow-smoke.py
 ```
 
-This focused smoke test prints workflow/job/task IDs and statuses for legacy NOOP, static transform, default HTTP discard, captured JSON selection and POST, successful retry, missing output and blocked downstream failure. It verifies the actual notification payload through the fixture, without AI calls or database output inspection. The fixed `/retry-orders` fixture route returns HTTP 500 for its first two calls, then the same JSON as `/orders`; its lock-protected counter resets only when the fixture process restarts. There is no reset or arbitrary behavior endpoint.
+Restart the fixture before rerunning: `/retry-orders` intentionally fails its first
+two requests and keeps that counter in memory. The private-address opt-in is for
+this controlled local fixture only. For intelligence too, keep `AI_ENABLED=true`
+and enable **both** `--profile ai --profile demo` when starting/recreating services.
 
-The local broker defaults to three partitions so both workers can consume. If an existing `task-queue` was auto-created with one partition, expand it without deleting messages:
+Then walk through:
 
-```powershell
-.\scripts\compose.ps1 exec kafka kafka-topics --bootstrap-server kafka:29092 --alter --topic task-queue --partitions 3
+1. Open workflow detail and inspect the DAG, then a successful run and its tasks.
+2. Open an active run to watch SSE/REST refresh; inspect a retry and terminal DLQ run.
+3. Read or explicitly generate a summary and failure analysis; inspect similar incidents.
+4. Ask Copilot "How many retries occurred?", then "Retry the failed task" for its refusal.
+5. Inspect stored optimization or use the REST collection to build enough linked history.
+6. Stop only Ollama, then repeat the manual pipeline; stored intelligence stays readable.
+
+```bash
+docker compose --profile ai stop ollama
+docker compose --profile demo restart task-demo
+python scripts/task-dataflow-smoke.py
+docker compose --profile ai start ollama
+# Stop services without deleting persisted data:
+docker compose --profile ai --profile demo stop
 ```
 
-Use `scripts/conductor-demo.http` for mixed workflows, HTTP-output dataflow, HTTP 500 retries/DLQ, analysis, incident retrieval, Copilot and summary requests. Internal task URLs use `http://task-demo:8080`; the fixture is also inspectable at `http://localhost:18080/health`. After the dataflow run, `GET http://localhost:18080/last-notification` returns the last successfully posted bounded JSON payload, including only the selected `id` and `email`. This opt-in fixture stores one payload in memory for demo verification and does not log it. Private-address opt-in is applied consistently to API, AI and both workers. Models still require explicit local pulls from the Ollama setup section; no cloud API or API key is used. On CPU-only hosts, the documented AI deadline overrides may be needed. Dockerfile Gradle commands prefer IPv4 during build downloads to mitigate observed Podman/WSL build-download timeouts; runtime networking is unchanged.
+Podman users run the same arguments through `.\scripts\compose.ps1`. Captured
+outputs are intentionally not displayed in the Control Plane. The fixture's
+`http://localhost:18080/last-notification` is a demo-only way to verify the selected
+synthetic payload; it is not a new Conductor output-viewer API.
 
-V8 adds `tasks.task_type` (default NOOP) and bounded `tasks.task_config_json` (default `{}`). V1–V7 are unchanged. Old template JSON and callers omitting type/config remain NOOP; supplied incompatible config is rejected. Kafka TaskEvent stays unchanged because workers load the authoritative configuration from PostgreSQL.
+## Observability and verification
 
-Handler metrics use `task_handler_requests_total`, `task_handler_failures_total` and `task_handler_duration_seconds`, tagged only by bounded handler type/outcome. Existing completion/failure counters remain with `handler_type` replacing arbitrary task-name tags; handler timing replaces the old duplicate worker timer. Panels are included in the existing Conductor Requests dashboard.
+Micrometer/Prometheus/Grafana cover job/task activity, AI operations and outbox
+pending/publication/latency metrics. Tags use bounded operation/outcome/handler
+types, never prompt text, URLs, job IDs, task IDs or captured output. Platform
+conventions use module-owned exceptions, ProblemDetail transport errors, Jakarta
+request constraints, explicit domain validation, AI-output validators and typed properties.
 
-Execution state and event intent commit atomically through the durable outbox. HTTP side effects still cannot be made exactly-once by a database transaction. A POST may repeat after a crash; downstream APIs must supply their own deduplication semantics. AI semantic correctness still requires human approval. There is no generalized dataflow, secret management or dynamic plugin system.
-
-## Architecture
-
-```
-┌──────────────┐   POST /jobs    ┌─────────────────────┐
-│    Client    │ ──────────────► │     loom-api         │  :8080
-└──────────────┘                 │  DAG validation      │
-                                 │  Job persistence      │
-                                 │  Flyway migrations    │
-                                 └─────────┬─────────────┘
-                                           │ job-created (Kafka)
-                                           ▼
-                                 ┌─────────────────────┐
-                                 │   loom-scheduler     │
-                                 │  Reactive R2DBC      │
-                                 │  Root task detection  │
-                                 │  Downstream unblock   │
-                                 │  Optimistic locking   │
-                                 └─────────┬─────────────┘
-                                           │ task-queue (Kafka)
-                              ┌────────────┴────────────┐
-                              ▼                          ▼
-                    ┌──────────────────┐      ┌──────────────────┐
-                    │  loom-worker-1   │      │  loom-worker-2   │  :8081 / :8082
-                    │  Redisson lock   │      │  Redisson lock   │
-                    │  Idempotency     │      │  Idempotency     │
-                    │  Retry + DLQ     │      │  Retry + DLQ     │
-                    └──────────────────┘      └──────────────────┘
-                                           │ task-results (Kafka)
-                                           ▼
-                                 ┌─────────────────────┐
-                                 │    loom-monitor      │  :8083
-                                 │  Read-only stats     │
-                                 │  DLQ browser         │
-                                 └─────────────────────┘
+```bash
+./gradlew build :loom-api:integrationTest :loom-worker:integrationTest :loom-scheduler:integrationTest --no-daemon
+python -m unittest discover -s scripts/tests -q
+cd conductor-ui
+npm ci
+npm run build
+npm test
+npm run lint
+cd ..
+git diff --check
 ```
 
-### Services
+On Windows use `gradlew.bat`; Testcontainers requires a reachable Docker-compatible
+API. Linux hosted CI uses Docker defaults. Windows Podman may need
+`TESTCONTAINERS_RYUK_DISABLED=true`; do not copy that override into hosted CI.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [runtime upgrade notes](docs/runtime-upgrade.md).
 
-| Service | Role | Port | Stack |
-|---|---|---|---|
-| `loom-common` | Shared entities, DTOs, Kafka events | — | JPA, Jackson |
-| `loom-api` | REST API, DAG validation, job persistence | 8080 | Spring MVC, JPA, Flyway, Kafka producer |
-| `loom-scheduler` | DAG execution engine, task scheduling | — | WebFlux, R2DBC, Kafka consumer |
-| `loom-worker` | Task execution, retry, DLQ | 8081 / 8082 | Spring MVC, JPA, Redisson, Kafka |
-| `loom-monitor` | Read-only stats and DLQ browser | 8083 | Spring MVC, JPA |
-| `loom-ai` | Structured proposals, failure interpretation, embeddings and incident synthesis; no execution or DB access | 8085 | Spring AI, Ollama, Spring MVC |
+Five stable checks run on PRs and main: **Build & Unit Tests**, **Integration Tests**,
+**Python Tests**, **Frontend Build**, **Container Build**. Models are faked in CI;
+no Ollama download/key is needed. The merged reliability baseline passed 619 Java
+unit tests, 91 integration tests (67 API / 16 worker / 8 scheduler), 45 frontend
+tests and 31 Python tests. Release checks use the current commit, not an old badge.
 
-### Infrastructure
+## Architecture decisions
 
-| Component | Purpose |
+| Decision | Reason / trade-off |
 |---|---|
-| PostgreSQL 15 + pgvector | Jobs, tasks, executions, workflows, analyses and incident vectors |
-| Kafka + ZooKeeper | Event bus — `job-created`, `task-queue`, `task-results` |
-| Redis | Distributed locks (Redisson) preventing duplicate task execution |
-| Prometheus | Metrics scraping from the API, AI service, monitor and workers |
-| Grafana | Metrics dashboards |
-
----
-
-## Key Design Decisions
-
-- **DAG validation** — cycle detection (DFS) and unknown-dependency checks before any DB write
-- **Post-commit Kafka publish** — `TransactionSynchronization.afterCommit()` ensures scheduler only sees persisted jobs
-- **Reactive scheduler** — R2DBC + WebFlux for non-blocking DAG traversal under load
-- **Distributed locking** — Redisson `tryLock` prevents two workers racing on the same task
-- **Idempotent execution** — deterministic `executionId = UUID.nameUUIDFromBytes(taskId + attemptNumber)` guards against duplicate processing on retry
-- **Exponential backoff** — retry delay = `2^attemptNumber` seconds, up to `maxRetries`
-- **FAIL_FAST policy** — on max retries exhausted, cancels all PENDING tasks and marks job FAILED
-- **Optimistic locking** — `version` column on both `jobs` and `tasks` prevents lost updates across concurrent workers
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Podman + standalone Docker Compose (no Docker Desktop required)
-- Java 25 (for local builds only)
-
-### Windows setup
-
-Run the WSL installation in Administrator PowerShell and restart if requested:
-
-```powershell
-wsl --install --no-distribution
-winget install --id RedHat.Podman --exact
-winget install --id Docker.DockerCompose --exact
-```
-
-In a new terminal (machine initialization is needed only once):
-
-```powershell
-podman machine init
-podman machine start
-.\gradlew.bat build
-.\scripts\compose.ps1 up --build -d
-```
-
-The helper locates Podman and a standalone Docker Compose provider even when the
-current terminal's PATH has not refreshed. Stop the stack with
-`.\scripts\compose.ps1 down`; named volumes retain database data.
-
-Testcontainers uses Podman's Docker-compatible API, not Docker Desktop. On Windows,
-`podman machine start` exposes the default named pipe. Run container tests with
-`.\gradlew.bat integrationTest`. On other platforms, configure `DOCKER_HOST` for
-Podman's socket as described in the [Testcontainers runtime guide](https://java.testcontainers.org/supported_docker_environment/).
-Do not disable Ryuk by default; it cleans up temporary test containers.
-
-### Run on Linux/macOS
-
-```bash
-./gradlew build
-PODMAN_COMPOSE_PROVIDER=docker-compose podman compose up --build -d
-```
-
-Services start in dependency order:
-1. PostgreSQL, ZooKeeper, Kafka, Redis
-2. loom-api (runs Flyway migrations)
-3. loom-scheduler, loom-worker-1, loom-worker-2, loom-monitor
-4. Prometheus, Grafana
-
-### URLs
-
-| Service | URL |
-|---|---|
-| API | http://localhost:8080 |
-| Swagger UI | http://localhost:8080/swagger-ui.html |
-| Monitor | http://localhost:8083/monitor/stats |
-| Prometheus | http://localhost:9090 |
-| Grafana | http://localhost:3000 (admin / admin) |
-
----
-
-## API Reference
-
-### Submit a Job
-
-```bash
-POST /api/v1/jobs
-```
-
-```json
-{
-  "name": "etl-pipeline",
-  "failurePolicy": "FAIL_FAST",
-  "tasks": [
-    { "taskId": "a", "name": "Extract",   "dependsOn": [],         "maxRetries": 3 },
-    { "taskId": "b", "name": "Transform", "dependsOn": ["a"],      "maxRetries": 3 },
-    { "taskId": "c", "name": "Load",      "dependsOn": ["b"],      "maxRetries": 3 }
-  ]
-}
-```
-
-`failurePolicy` values:
-- `FAIL_FAST` — first dead-lettered task cancels all pending tasks, job → FAILED
-- `CONTINUE_ON_FAILURE` - independent work continues; the job is marked FAILED when failure is observed, even while independent tasks remain active.
-
-### Other Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/v1/jobs/{jobId}` | Get job + task statuses |
-| `DELETE` | `/api/v1/jobs/{jobId}` | Cancel job (→ CANCELLING) |
-| `POST` | `/api/v1/workflows` | Create reusable workflow template |
-| `GET` | `/api/v1/workflows/{templateId}` | Get workflow template |
-| `POST` | `/api/v1/workflows/{templateId}/jobs` | Submit job from template |
-| `GET` | `/api/v1/dlq` | List dead-lettered tasks |
-| `POST` | `/api/v1/dlq/{taskId}/retry` | Re-queue a dead-lettered task |
-| `GET` | `/monitor/stats` | Aggregated job + task counts by status |
-| `GET` | `/monitor/dlq` | Paginated dead-letter queue view |
-
-### Job + Task Statuses
-
-```
-Job:   CREATED → RUNNING → COMPLETE | FAILED | CANCELLED
-Task:  PENDING → RUNNING → COMPLETE | FAILED → DEAD_LETTERED | CANCELLED
-```
-
-### Example — Diamond DAG
-
-```bash
-curl -s -X POST http://localhost:8080/api/v1/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "diamond",
-    "failurePolicy": "CONTINUE",
-    "tasks": [
-      { "taskId": "a", "name": "Ingest",    "dependsOn": [],         "maxRetries": 2 },
-      { "taskId": "b", "name": "Branch-1",  "dependsOn": ["a"],      "maxRetries": 2 },
-      { "taskId": "c", "name": "Branch-2",  "dependsOn": ["a"],      "maxRetries": 2 },
-      { "taskId": "d", "name": "Aggregate", "dependsOn": ["b", "c"], "maxRetries": 2 }
-    ]
-  }' | jq .
-```
-
----
-
-## Observability
-
-The API, AI service, monitor, and workers expose Prometheus metrics at
-`/actuator/prometheus`. The scheduler does not currently expose Actuator metrics.
-
-Open the provisioned [Conductor application requests dashboard](http://localhost:3000/d/conductor-requests)
-in Grafana (`admin` / `admin` for the local stack). It shows request counts and
-rates, routes/methods/status codes, HTTP errors, API/AI p95 latency, and AI
-generation counts, failures, and duration. Use the service selector to focus on
-`loom-api` or `loom-ai`. Health checks and Prometheus scrapes are excluded from
-business request panels. Routes use templates rather than individual workflow IDs.
-
-Prometheus scrapes and the dashboard refresh every 15 seconds; rates need at
-least two samples. HTTP timers record completed requests, while the AI request
-counter increments when a generation call starts. Latency histograms include
-calls up to 180 seconds. No prompts or request bodies are sent to Grafana.
-AI latency cards summarize calls since the AI process started, so a single
-generation is visible; request rates use a rolling window. Counters reset when
-services restart.
-
-To see traffic without invoking a model or modifying workflows:
-
-```powershell
-1..20 | ForEach-Object {
-    Invoke-RestMethod 'http://localhost:8080/api/v1/jobs/7975a135-15f6-46fb-b928-e2f84afefa40' | Out-Null
-}
-```
-
-Replace the demo job ID with one from your own workflow execution. The dashboard
-is provisioned from repository configuration; no manual import is required.
-
-Key metrics:
-
-| Metric | Description |
-|---|---|
-| `loom_jobs_submitted_total` | Jobs submitted, tagged by `failurePolicy` |
-| `loom_tasks_completed_total` | Tasks completed, tagged by `taskName` |
-| `loom_tasks_failed_total` | Tasks failed, tagged by `taskName` |
-| `loom_task_execution_duration_seconds` | Task duration histogram, tagged by `taskName` + `outcome` |
-| `http_server_requests_seconds_count` | Completed HTTP requests by route, method, and status |
-| `http_server_requests_seconds_bucket` | HTTP latency histogram in the API and AI service |
-| `ai_requests_total` | Local model requests by operation: generation, failure interpretation, embedding, synthesis |
-| `ai_request_failures_total` | Local model failures by operation |
-| `ai_request_duration_seconds_bucket` | Local model latency histogram |
-| `ai_incident_search_requests_total` | Historical incident searches |
-| `ai_incident_search_failures_total` | Historical incident search failures |
-| `ai_incident_search_duration_seconds` | Historical incident search latency by outcome |
-
----
-
-## Development
-
-### Run Tests
-
-`Conductor CI` verifies pull requests and pushes to `main` with five independent
-jobs: **Build & Unit Tests**, **Integration Tests**, **Python Tests**,
-**Frontend Build**, and **Container Build**. It uses Ubuntu, Temurin Java 25, the checked-in Gradle
-wrapper, Python 3.13, and Docker/Testcontainers defaults. Local development stays
-Podman-first. No real Ollama models, cloud APIs, or secrets are needed.
-
-`./gradlew build` runs unit tests and builds artifacts; `*IT` classes are excluded
-from that task. API and worker `integrationTest` tasks cover real database/container
-behavior, fresh Flyway schemas, and V7/V10 upgrade paths through V11. Python tests
-exercise smoke-helper/fixture behavior using only the standard library. CI also
-checks patch whitespace, rejects edits to merged migrations, validates all Compose
-profiles, checks tracked files remain clean after build, and builds the five
-distinct backend images plus the Control Plane image without launching services.
-Frontend Build uses Node 24 and runs `npm ci`, the typechecked production build,
-and focused Vitest tests. Add this stable check to recommended branch protections.
-Failed Java jobs retain
-test reports for seven days.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete pre-PR commands and
-recommended required checks. Dependabot checks Gradle and Actions dependencies
-weekly, groups minor/patch updates, and never auto-merges. CI does not publish
-releases, deploy services, or enforce an arbitrary coverage threshold.
-
-```bash
-# Unit tests only
-./gradlew :loom-api:test --tests "com.tarunkishore.loom_api.service.DAGValidatorTest"
-./gradlew :loom-scheduler:test --tests "com.loom.scheduler.service.DAGSchedulerTest"
-./gradlew :loom-worker:test --tests "com.loom.worker.service.TaskExecutorServiceTest"
-
-# Integration tests (requires a running Podman machine)
-./gradlew integrationTest
-
-# Windows Podman/Testcontainers connection, if no Docker-compatible default pipe exists:
-# $env:DOCKER_HOST='npipe:////./pipe/podman-machine-default'
-# $env:TESTCONTAINERS_RYUK_DISABLED='true' # rootless Podman; normal test cleanup still runs
-```
-
-Current verification on Java 25 / Podman passed:
-
-- `./gradlew build :loom-api:integrationTest :loom-worker:integrationTest --no-daemon --rerun-tasks`: 566 unit tests, 44 API integration tests and 11 worker integration tests; no failures or skips.
-- `python -m unittest discover -s scripts/tests -q`: 31 helper tests.
-- `git diff --check`: passed.
-
-Normal tests use fake models; integration tests use real PostgreSQL/pgvector, Kafka
-and Redis containers without live Ollama calls. Migration coverage upgrades V7 data
-through the latest schema and V10 attempts to V11, preserving historical NOOP
-tasks and nullable outputs.
-
-The local two-worker demo verified overlapping parallel branches, all four handlers,
-HTTP 500 attempts numbered 0, 1 and 2 followed by DLQ, and a real Ollama-generated
-proposal approved and executed through the normal workflow path. Failure analysis,
-local incident embeddings/retrieval, evidence-backed Copilot answers and successful/
-failed execution summaries were verified against those runs. Copilot tools expose
-recorded retry evidence separately from configured retry limits.
-
-With Ollama stopped, mixed-capability and legacy NOOP workflows still completed,
-the controlled HTTP failure still retried and entered DLQ, stored analysis and
-summaries remained readable, and indexed incident search remained available.
-Repeated summary generation reused the stored row; uncached workflow generation
-returned 503. Ollama was restarted after verification.
-
-### Extending task capabilities
-
-Capabilities are application-owned. A future addition requires a bounded task type/config, validator, catalog/schema entry and Spring handler bean; it must retain worker-owned persistence/retry/DLQ. Duplicate registrations fail startup. The current contract is:
-
-```java
-public interface TaskHandler {
-    TaskType type();
-    TaskExecutionResult execute(TaskExecutionContext context) throws Exception;
-}
-```
-
-### Module Structure
-
-```
-conductor/
-├── loom-common/       # Shared models, DTOs, Kafka events
-├── loom-api/          # REST API + Flyway migrations
-├── loom-scheduler/    # Reactive DAG execution engine
-├── loom-worker/       # Task executor (scale horizontally)
-├── loom-monitor/      # Read-only observability service
-├── compose.yml
-└── prometheus.yml
-```
-
----
-
-## Tech Stack
-
-- **Java 25** / Spring Boot 4.1.1
-- **Spring Data JPA** (loom-api, loom-worker, loom-monitor)
-- **Spring Data R2DBC + WebFlux** (loom-scheduler)
-- **Spring Kafka** — producer + consumer across all services
-- **Redisson** — Redis-backed distributed locking
-- **Flyway** — versioned DB migrations owned by loom-api
-- **Micrometer + Prometheus + Grafana** — metrics pipeline
-- **springdoc-openapi** — auto-generated Swagger UI
-- **Testcontainers** — integration tests with real Postgres + Kafka
-
-## Sample curls
-``` Submit job — linear chain (A→B→C):                                                                                                                                                                                 
-  curl -s -X POST http://localhost:8080/api/v1/jobs \                                                                                                                                                                
-    -H "Content-Type: application/json" \                                                                                                                                                                            
-    -d '{                                                                                                                                                                                                            
-      "name": "my-pipeline",
-      "failurePolicy": "FAIL_FAST",
-      "tasks": [
-        {"taskId": "a", "name": "Extract",  "dependsOn": [],    "maxRetries": 3},
-        {"taskId": "b", "name": "Transform","dependsOn": ["a"], "maxRetries": 3},
-        {"taskId": "c", "name": "Load",     "dependsOn": ["b"], "maxRetries": 3}
-      ]
-    }' | jq .
-
-  Submit job — diamond DAG (A→B, A→C, B+C→D):
-  curl -s -X POST http://localhost:8080/api/v1/jobs \
-    -H "Content-Type: application/json" \
-    -d '{
-      "name": "diamond-job",
-      "failurePolicy": "CONTINUE",
-      "tasks": [
-        {"taskId": "a", "name": "Ingest",    "dependsOn": [],         "maxRetries": 2},
-        {"taskId": "b", "name": "Branch-1",  "dependsOn": ["a"],      "maxRetries": 2},
-        {"taskId": "c", "name": "Branch-2",  "dependsOn": ["a"],      "maxRetries": 2},
-        {"taskId": "d", "name": "Aggregate", "dependsOn": ["b", "c"], "maxRetries": 2}
-      ]
-    }' | jq .
-
-  Get job status (replace <JOB_ID> with id from submit response):
-  curl -s http://localhost:8080/api/v1/jobs/<JOB_ID> | jq .
-
-  Cancel job:
-  curl -s -X DELETE http://localhost:8080/api/v1/jobs/<JOB_ID> | jq .
-
-  Create workflow template:
-  curl -s -X POST http://localhost:8080/api/v1/workflows \
-    -H "Content-Type: application/json" \
-    -d '{
-      "name": "etl-template",
-      "description": "Standard ETL pipeline",
-      "defaultFailurePolicy": "FAIL_FAST",
-      "tasks": [
-        {"taskId": "e", "name": "Extract",  "dependsOn": [],    "maxRetries": 3},
-        {"taskId": "t", "name": "Transform","dependsOn": ["e"], "maxRetries": 3},
-        {"taskId": "l", "name": "Load",     "dependsOn": ["t"], "maxRetries": 3}
-      ]
-    }' | jq .
-
-  Submit job from template:
-  curl -s -X POST http://localhost:8080/api/v1/workflows/<TEMPLATE_ID>/jobs \
-    -H "Content-Type: application/json" \
-    -d '{"name": "etl-run-1"}' | jq .
-
-  View DLQ (dead-lettered tasks):
-  curl -s "http://localhost:8080/api/v1/dlq?page=0&size=20" | jq .
-
-  Retry DLQ task:
-  curl -s -X POST http://localhost:8080/api/v1/dlq/<TASK_ID>/retry | jq .
-
-  Monitor stats (port 8083):
-  curl -s http://localhost:8083/monitor/stats | jq .
-
-  Monitor DLQ:
-  curl -s "http://localhost:8083/monitor/dlq?page=0&size=20" | jq . ```
+| PostgreSQL transactional outbox | State and event intent share the authoritative DB transaction; no separate delayed-queue infrastructure |
+| Kafka at least once | Transport/recovery with explicit duplicate handling, not distributed exactly once |
+| Redisson + deterministic attempt IDs | Concurrent delivery coordination plus persistent duplicate-attempt identity |
+| R2DBC scheduler, JPA worker/API | Preserve existing service transaction models; no conversion solely to share a writer |
+| Whole direct-dependency outputs | Useful composition without an expression/variable language |
+| Isolated local Ollama | Optional interpretation without scheduler, worker, Kafka or database authority |
+| Immutable intelligence snapshots | Inspectable facts, stable-context reuse and stored reads during model outages |
+
+## Safety and known limitations
+
+HTTP allows GET/POST only, rejects credentials/query strings/fragments in URLs,
+disables redirects, cookies, custom/auth headers and automatic HTTP retries, and
+bounds time and body sizes. DNS/address checks block loopback/private/link-local,
+multicast/unspecified and metadata destinations by default. Private-address access
+requires explicit local opt-in. These checks are a defined boundary, not a claim
+of perfect protection against every DNS/network deployment scenario.
+
+- No authentication, workspaces or tenant isolation; use a trusted local environment.
+- Cancellation is cooperative: no current finalizer transitions CANCELLING to CANCELLED,
+  and running handlers are not interrupted.
+- No dynamic fan-out, scheduled workflows, arbitrary plugin runtime or secret manager.
+- No exactly-once external HTTP effects; downstream cooperation would be required.
+- SSE is process-local invalidation, not durable replay or a multi-replica event bus.
+- The incident auto-index queue remains process-local; stored vectors remain durable.
+- Copilot is single-turn, with no conversation memory. Local interpretation can
+  hallucinate despite evidence/schema validation; inspect its citations.
+- Optimization is advisory; structural concurrency does not prove semantic independence.
+- Replay does not reactivate cancelled descendants; summary eligibility can reject
+  a replay-completed run containing cancelled tasks.
+- Outbox rows are retained; cleanup/retention is future operational work.
+- There is no generalized dataflow language, arbitrary shell/code/SQL execution,
+  hosted service or cloud AI fallback.
+
+The v1 scope is complete. Remaining project work is demo/documentation/release
+presentation; hypothetical production controls are not promises of additional features.
+
+## Technology and license
+
+Java 25, Spring Boot 4.1.2, Gradle, Spring AI, PostgreSQL/pgvector, Kafka,
+Redis/Redisson, Flyway V1-V12, React/TypeScript/Vite, SSE, Micrometer,
+Prometheus/Grafana, Docker/Podman and optional local Ollama.
+
+[MIT license](LICENSE). Dependencies retain their respective licenses.
